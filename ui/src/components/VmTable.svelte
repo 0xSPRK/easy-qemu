@@ -80,7 +80,7 @@
                 <button class="ghost danger-text" title="Force stop" onclick={(e) => { e.stopPropagation(); forceStop(vm); }}>⏻</button>
               {:else}
                 <button class="ghost" title="Start" onclick={(e) => { e.stopPropagation(); start(vm); }}>▶</button>
-                <button class="ghost danger-text" title="Delete…" onclick={(e) => { e.stopPropagation(); askDelete(vm); }}>🗑</button>
+                <button class="ghost danger-text" title="Delete…" onclick={(e) => { e.stopPropagation(); askDelete(vm); }}>✕</button>
               {/if}
             </div>
           </td>

@@ -131,7 +131,7 @@ label.field > span {
   margin-right: 7px;
   vertical-align: baseline;
 }
-.dot.running { background: var(--ok); box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 60%, transparent); }
+.dot.running { background: var(--ok); }
 .dot.paused { background: var(--warn); }
 .dot.shutoff { background: transparent; border: 1.5px solid var(--fg3); box-shadow: none; }
 .dot.unknown { background: var(--unknown); }

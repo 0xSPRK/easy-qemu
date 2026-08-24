@@ -32,7 +32,7 @@
       title={warnings.join("\n")}
       onclick={onOpenSettings}
     >
-      ⚠ config warning — click to review
+      <span class="warn-mark">!</span>Config warning — click to review
     </button>
   {/if}
 </footer>
@@ -61,4 +61,17 @@
     font-weight: 600;
   }
   .warn { color: var(--warn); font-size: 12px; }
+  .warn-mark {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    margin-right: 6px;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 12px;
+    text-align: center;
+    vertical-align: -1px;
+  }
 </style>
