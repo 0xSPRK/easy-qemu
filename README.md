@@ -46,4 +46,4 @@ npm run tauri build               # NSIS installer in src-tauri/target/release/b
 
 ## License
 
-MIT
+GPL-3.0-only — see [LICENSE](LICENSE).
