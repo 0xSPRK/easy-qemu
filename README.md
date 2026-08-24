@@ -27,15 +27,15 @@ ui            frontend (Vite + Svelte 5 + TS); noVNC is bundled via npm
 Requirements: Rust (MSVC), Node 20+, WebView2 Runtime (built into Win10/11).
 
 ```bash
-npm install --prefix ui
+npm install                       # installs ui/ dependencies
 cargo test -p easy-qemu-core      # core tests
-npm run tauri dev                 # run in development mode
+npm run dev                       # run in development mode (alias: npm run tauri dev)
 ```
 
 ## Build
 
 ```bash
-npm run tauri build               # NSIS installer in src-tauri/target/release/bundle/
+npm run build                     # NSIS installer in target/release/bundle/
 ```
 
 ## Data locations
