@@ -2,10 +2,13 @@
   "name": "easy-qemu",
   "private": true,
   "version": "0.2.0",
-  "description": "Root helper that forwards npm scripts into ui/",
+  "description": "Easy QEMU — desktop manager for QEMU virtual machines",
   "scripts": {
-    "tauri": "npm --prefix ui run tauri",
-    "dev": "npm --prefix ui run tauri dev",
-    "build": "npm --prefix ui run tauri build"
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6"
   }
 }

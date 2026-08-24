@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "io.github.easyqemu.app",
   "build": {
-    "beforeDevCommand": "npm run dev --prefix ../ui",
+    "beforeDevCommand": "npm run dev --prefix ui",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build --prefix ../ui",
+    "beforeBuildCommand": "npm run build --prefix ui",
     "frontendDist": "../ui/dist"
   },
   "app": {
