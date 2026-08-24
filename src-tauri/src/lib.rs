@@ -74,6 +74,7 @@ pub fn run() {
             commands::get_config,
             commands::set_config,
             commands::get_config_warnings,
+            commands::probe_env,
             commands::pick_path,
         ])
         .run(tauri::generate_context!())

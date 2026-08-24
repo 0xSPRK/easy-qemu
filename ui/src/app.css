@@ -26,6 +26,19 @@
 
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* animation tokens */
+  --t-fast: 130ms;
+  --t-med: 180ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -54,9 +67,14 @@ button {
   border-radius: var(--radius-sm);
   padding: 6px 12px;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  transition:
+    background var(--t-fast) ease,
+    border-color var(--t-fast) ease,
+    opacity var(--t-fast) ease,
+    transform var(--t-fast) var(--ease-out);
 }
 button:hover:not(:disabled) { background: var(--bg3); border-color: var(--fg3); }
+button:active:not(:disabled) { transform: scale(0.98); }
 button:disabled { opacity: 0.38; cursor: default; }
 button.primary {
   background: var(--accent);
@@ -151,4 +169,42 @@ label.field > span {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 18px;
   border-top: 1px solid var(--line);
+}
+
+/* small preset chip buttons (memory sizes, accel badges) */
+.chip {
+  font-size: 12px;
+  font-family: var(--mono);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg2);
+}
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #101013;
+  font-weight: 600;
+}
+
+/* range slider — monochrome */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--bg3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+}
+input[type="range"]:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "../lib/api";
+  import Modal from "./Modal.svelte";
   import type { VmListItem } from "../lib/types";
 
   let { vm, onclose }: { vm: VmListItem; onclose: () => void } = $props();
@@ -13,19 +14,15 @@
   });
 </script>
 
-<div class="overlay">
-  <div class="modal" style="width: 760px; height: 70vh">
-    <header>
-      <h3>QEMU log — {vm.name}</h3>
-      <button class="ghost" onclick={onclose}>✕</button>
-    </header>
-    <pre class="body mono">{text}</pre>
-  </div>
-</div>
+<Modal title={`QEMU log — ${vm.name}`} width="760px" {onclose}>
+  <pre class="body mono">{text}</pre>
+</Modal>
 
 <style>
   pre.body {
     margin: 0;
+    min-height: 320px;
+    max-height: calc(70vh - 100px);
     white-space: pre-wrap;
     word-break: break-word;
     color: var(--fg2);

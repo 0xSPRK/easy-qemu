@@ -184,6 +184,13 @@ pub async fn get_config_warnings(m: State<'_, Manager>) -> CmdResult<Vec<String>
     Ok(m.get_config_warnings().await)
 }
 
+/// Detect QEMU binaries and supported accelerators on this host.
+#[tauri::command]
+pub async fn probe_env(m: State<'_, Manager>) -> CmdResult<easy_qemu_core::env::EnvProbe> {
+    let cfg = m.get_config().await;
+    Ok(easy_qemu_core::env::probe(&cfg))
+}
+
 /// Native file/folder picker. `kind`: "iso" | "qcow2" | "folder" | "any".
 #[tauri::command]
 pub fn pick_path(app: AppHandle, kind: String) -> Option<String> {

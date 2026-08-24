@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
   import RFB from "@novnc/novnc";
   import { api } from "../lib/api";
   import type { ConsoleInfo } from "../lib/types";
@@ -10,7 +11,18 @@
   let info = $state<ConsoleInfo | null>(null);
   let connected = $state(false);
   let errorText = $state("");
+  let toolbarVisible = $state(true);
   let rfb: RFB | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function wakeToolbar() {
+    toolbarVisible = true;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      // hide only while the session is up — errors must stay readable
+      if (connected) toolbarVisible = false;
+    }, 2200);
+  }
 
   async function connect() {
     errorText = "";
@@ -23,9 +35,13 @@
       rfb.scaleViewport = true;
       rfb.resizeSession = true;
       rfb.background = "#0a0a0b";
-      rfb.addEventListener("connect", () => (connected = true));
+      rfb.addEventListener("connect", () => {
+        connected = true;
+        wakeToolbar();
+      });
       rfb.addEventListener("disconnect", (e) => {
         connected = false;
+        toolbarVisible = true;
         const detail = (e as CustomEvent).detail as { clean?: boolean };
         if (!detail?.clean) errorText = "Connection lost.";
       });
@@ -45,7 +61,9 @@
 
   onMount(() => {
     void connect();
+    wakeToolbar();
     return () => {
+      if (idleTimer) clearTimeout(idleTimer);
       try {
         rfb?.disconnect();
       } catch {
@@ -63,10 +81,22 @@
   }
 </script>
 
+<svelte:window onmousemove={wakeToolbar} />
+
 <div class="console">
-  <header class="bar">
+  <header
+    class="bar"
+    class:hidden={!toolbarVisible}
+    transition:fade={{ duration: 150 }}
+  >
     <span class="dot" class:running={connected}></span>
-    <span class="status">{connected ? "connected" : errorText ? "disconnected" : "connecting…"}</span>
+    <span class="status">
+      {#if info}
+        VNC :{info.vnc_port} · {connected ? "connected" : "connecting…"}
+      {:else}
+        connecting…
+      {/if}
+    </span>
     <span style="flex:1"></span>
     <button onclick={sendCtrlAltDel} disabled={!connected}>Ctrl+Alt+Del</button>
     <button onclick={fullscreen}>Fullscreen</button>
@@ -76,7 +106,7 @@
   <div class="screen" bind:this={container}></div>
 
   {#if !connected}
-    <div class="veil">
+    <div class="veil" transition:fade={{ duration: 150 }}>
       {#if errorText}
         <div class="msg err">{errorText}</div>
         <button class="primary" onclick={() => { errorText = ""; void connect(); }}>Retry</button>
@@ -102,8 +132,19 @@
     border-bottom: 1px solid var(--line);
     background: var(--bg1);
     user-select: none;
+    transition:
+      transform var(--t-med) var(--ease-out),
+      opacity var(--t-med) ease;
   }
-  .status { color: var(--fg2); font-size: 12.5px; }
+  .bar.hidden {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    z-index: 5;
+  }
+  .status { color: var(--fg2); font-size: 12.5px; font-family: var(--mono); }
   .screen {
     flex: 1;
     min-height: 0;
@@ -118,6 +159,7 @@
     place-content: center;
     justify-items: center;
     gap: 14px;
+    z-index: 4;
   }
   .msg { color: var(--fg2); }
   .msg.err { color: var(--err); }

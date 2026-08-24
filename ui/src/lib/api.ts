@@ -3,6 +3,7 @@ import type {
   AppConfig,
   ConsoleInfo,
   DeleteReport,
+  EnvProbe,
   RunningInfo,
   SnapInfo,
   Vm,
@@ -42,6 +43,7 @@ export const api = {
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (cfg: AppConfig) => invoke<void>("set_config", { cfg }),
   getConfigWarnings: () => invoke<string[]>("get_config_warnings"),
+  probeEnv: () => invoke<EnvProbe>("probe_env"),
 
   pickPath: (kind: "iso" | "qcow2" | "folder" | "any") =>
     invoke<string | null>("pick_path", { kind }),

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fade } from "svelte/transition";
   import { statuses } from "../lib/state";
   import { api, humanMb, uptimeStr } from "../lib/api";
   import { toast } from "../lib/toast";
@@ -31,7 +32,8 @@
   </header>
 
   <div class="body">
-    <div class="grid">
+    {#key vm.id}
+      <div class="grid" in:fade={{ duration: 120 }}>
       <div class="kv"><span>vCPU</span><b>{vm.cpus}</b></div>
       <div class="kv"><span>Memory</span><b>{humanMb(vm.memory_mb)}</b></div>
       <div class="kv"><span>Platform</span><b>{vm.machine}</b></div>
@@ -61,7 +63,8 @@
       <div class="kv"><span>Uptime</span><b>{uptime}</b></div>
       <div class="kv"><span>PID</span><b class="mono">{upd?.pid ?? "—"}</b></div>
       <div class="kv"><span>VNC port</span><b class="mono">{vncPort ?? "—"}</b></div>
-    </div>
+      </div>
+    {/key}
   </div>
 
   <footer>

@@ -100,6 +100,12 @@ export interface AppConfig {
   theme: string | null;
 }
 
+export interface EnvProbe {
+  qemu_system: string | null;
+  qemu_img: string | null;
+  accels: string[];
+}
+
 export interface DeleteReport {
   json_removed: boolean;
   pidfile_removed: boolean;
