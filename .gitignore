@@ -1,0 +1,6 @@
+/target
+/node_modules
+/ui/dist
+/ui/node_modules
+*.log
+.DS_Store

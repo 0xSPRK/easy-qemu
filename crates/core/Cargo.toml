@@ -1,0 +1,20 @@
+[package]
+name = "easy-qemu-core"
+description = "Core library for Easy QEMU: VM storage, QEMU process management, QMP client, VNC websockify proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "5"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "process"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
