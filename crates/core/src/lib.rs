@@ -7,9 +7,10 @@ pub mod proxy;
 pub mod qemu;
 pub mod qmp;
 pub mod snapshots;
+pub mod ssh;
 pub mod store;
 pub mod vm;
 
 pub use manager::{ConsoleInfo, Manager, QmpAction, Status, VmListItem, VmUpdate};
 pub use store::RunningInfo;
-pub use vm::VmDraft;
+pub use vm::{SshConfig, VmDraft};

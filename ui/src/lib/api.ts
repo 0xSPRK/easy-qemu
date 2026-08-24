@@ -6,6 +6,7 @@ import type {
   EnvProbe,
   RunningInfo,
   SnapInfo,
+  SshConfig,
   Vm,
   VmDraft,
   VmListItem,
@@ -28,6 +29,8 @@ export const api = {
 
   openConsole: (id: string) => invoke<ConsoleInfo>("open_console", { id }),
   closeConsole: (id: string) => invoke<void>("close_console", { id }),
+
+  sshConnect: (id: string) => invoke<SshConfig>("ssh_connect", { id }),
 
   readLog: (id: string, lines?: number) =>
     invoke<string>("read_log", { id, lines: lines ?? null }),

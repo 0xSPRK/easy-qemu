@@ -23,6 +23,15 @@
       toast(String(e), "error");
     }
   }
+
+  async function openSsh() {
+    try {
+      const t = await api.sshConnect(vm.id);
+      toast(`SSH ${t.user}@${t.host}:${t.port} opened in a terminal`, "success");
+    } catch (e) {
+      toast(String(e).replace(/^[^:]*Error:\s*/, "").trim(), "error");
+    }
+  }
 </script>
 
 <aside class="panel details">
@@ -57,6 +66,10 @@
       {#if vm.iso}
         <div class="kv wide"><span>ISO</span><b class="mono wrap">{vm.iso}</b></div>
       {/if}
+      <div class="kv wide">
+        <span>SSH</span>
+        <b class="mono wrap">{vm.ssh.user}@{vm.ssh.host}:{vm.ssh.port}</b>
+      </div>
 
       <div class="sep"></div>
 
@@ -73,6 +86,13 @@
       Snapshots
     </button>
     <span style="flex:1"></span>
+    <button
+      onclick={openSsh}
+      disabled={status !== 'running'}
+      title={status !== 'running' ? "Start the VM first" : "Open an SSH session in a terminal"}
+    >
+      SSH
+    </button>
     <button
       class="primary"
       onclick={openConsole}

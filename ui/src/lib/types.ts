@@ -16,6 +16,14 @@ export interface HostFwd {
   guest_port: number;
 }
 
+export interface SshConfig {
+  host: string;
+  port: number;
+  user: string;
+}
+
+export const DEFAULT_SSH: SshConfig = { host: "127.0.0.1", port: 22, user: "root" };
+
 export interface Vm {
   id: string;
   name: string;
@@ -34,6 +42,7 @@ export interface Vm {
   net_mode: NetMode;
   net_model: NetModel;
   hostfwd: HostFwd[];
+  ssh: SshConfig;
 }
 
 export interface VmListItem extends Vm {
@@ -89,6 +98,7 @@ export interface VmDraft {
   net_mode: NetMode;
   net_model: NetModel;
   hostfwd: HostFwd[];
+  ssh: SshConfig;
   disk: DiskSpec;
 }
 

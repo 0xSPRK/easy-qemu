@@ -237,6 +237,26 @@ pub struct HostFwd {
     pub guest_port: u16,
 }
 
+/// Per-VM SSH connection target, remembered across sessions.
+/// With NAT networking the port is typically a hostfwd host port
+/// (e.g. 2222), not the guest-side 22.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        SshConfig {
+            host: "127.0.0.1".into(),
+            port: 22,
+            user: "root".into(),
+        }
+    }
+}
+
 impl HostFwd {
     pub fn qemu_fragment(&self) -> String {
         format!(
@@ -277,6 +297,9 @@ pub struct Vm {
     pub net_model: NetModel,
     #[serde(default)]
     pub hostfwd: Vec<HostFwd>,
+    /// SSH target; older records get the default via serde.
+    #[serde(default)]
+    pub ssh: SshConfig,
 }
 
 fn true_default() -> bool {
@@ -308,6 +331,8 @@ pub struct VmDraft {
     pub net_model: NetModel,
     #[serde(default)]
     pub hostfwd: Vec<HostFwd>,
+    #[serde(default)]
+    pub ssh: SshConfig,
     pub disk: DiskSpec,
 }
 
@@ -331,6 +356,7 @@ pub struct ValidatedDraft {
     pub cpus: u32,
     pub iso: Option<PathBuf>,
     pub hostfwd: Vec<HostFwd>,
+    pub ssh: SshConfig,
     pub disk: DiskSpec,
 }
 
@@ -347,6 +373,7 @@ impl VmDraft {
             cpus,
             iso,
             hostfwd,
+            ssh: self.ssh.clone(),
             disk: self.disk.clone(),
         })
     }

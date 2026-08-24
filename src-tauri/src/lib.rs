@@ -67,6 +67,7 @@ pub fn run() {
             commands::open_console,
             commands::close_console,
             commands::read_log,
+            commands::ssh_connect,
             commands::snapshot_op,
             commands::get_config,
             commands::set_config,

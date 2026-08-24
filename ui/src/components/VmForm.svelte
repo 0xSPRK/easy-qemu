@@ -5,9 +5,10 @@
   import { reloadVms } from "../lib/state";
   import Modal from "./Modal.svelte";
   import type {
-    HostFwd, Vm, VmDraft, FwdProto,
+    HostFwd, Vm, VmDraft, FwdProto, SshConfig,
     Accel, DisplayMode, MachineType, Firmware, CpuModel, NetMode, NetModel,
   } from "../lib/types";
+  import { DEFAULT_SSH } from "../lib/types";
 
   let { existing = null, onclose }: { existing: Vm | null; onclose: () => void } = $props();
 
@@ -42,6 +43,25 @@
   // hostfwd rules
   let fwd = $state<HostFwd[]>(
     existing ? (JSON.parse(JSON.stringify(existing.hostfwd)) as HostFwd[]) : []
+  );
+
+  // ssh target (remembered per VM)
+  let sshHost = $state(existing?.ssh?.host ?? DEFAULT_SSH.host);
+  let sshPort = $state(existing?.ssh?.port ?? DEFAULT_SSH.port);
+  let sshUser = $state(existing?.ssh?.user ?? DEFAULT_SSH.user);
+
+  function resetSsh() {
+    sshHost = DEFAULT_SSH.host;
+    sshPort = DEFAULT_SSH.port;
+    sshUser = DEFAULT_SSH.user;
+  }
+
+  /** NAT hides the guest behind the host: a hostfwd rule's host port is the
+   *  reachable SSH port, so offer one-click fill from the rules. */
+  const fwdSshRules = $derived(
+    netMode === "nat"
+      ? fwd.filter((r) => validPort(r.host_port) && validPort(r.guest_port))
+      : []
   );
   function addFwd() {
     fwd.push({ proto: "tcp" as FwdProto, host_port: 8000, guest_port: 80 });
@@ -115,6 +135,11 @@
                 guest_port: Number(f.guest_port),
               }))
             : [],
+        ssh: {
+          host: sshHost.trim() || DEFAULT_SSH.host,
+          port: Number(sshPort) || DEFAULT_SSH.port,
+          user: sshUser.trim() || DEFAULT_SSH.user,
+        },
         disk: isEdit
           ? { kind: "existing", path: diskExistingPath || existing!.disk_path }
           : diskNew
@@ -310,6 +335,43 @@
           <p class="err-note">Duplicate host port for the same protocol.</p>
         {/if}
       </div>
+    {/if}
+
+    <div class="sep"></div>
+
+    <!-- ssh -->
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px">
+      <b style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--fg3)">SSH</b>
+      <button type="button" class="chip" onclick={resetSsh} title="Restore defaults (root@127.0.0.1:22)">
+        reset to defaults
+      </button>
+    </div>
+    <div class="row3">
+      <label class="field"><span>Host</span>
+        <input type="text" bind:value={sshHost} placeholder="127.0.0.1" />
+      </label>
+      <label class="field"><span>Port</span>
+        <input type="number" min="1" max="65535" bind:value={sshPort} />
+      </label>
+      <label class="field"><span>User</span>
+        <input type="text" bind:value={sshUser} placeholder="root" />
+      </label>
+    </div>
+    {#if fwdSshRules.length > 0}
+      <div class="chips">
+        {#each fwdSshRules as r}
+          <button
+            type="button"
+            class="chip"
+            class:active={Number(sshPort) === r.host_port}
+            title="Fill SSH port from this hostfwd rule"
+            onclick={() => (sshPort = r.host_port)}
+          >
+            {r.proto} :{r.host_port} → :{r.guest_port}
+          </button>
+        {/each}
+      </div>
+      <p class="note">With NAT, use the host port of a forwarding rule as the SSH port.</p>
     {/if}
   </div>
 

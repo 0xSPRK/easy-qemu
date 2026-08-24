@@ -1,7 +1,9 @@
 use easy_qemu_core::manager::QmpAction;
 use easy_qemu_core::snapshots::SnapInfo;
 use easy_qemu_core::store::DeleteReport;
-use easy_qemu_core::{config, ConsoleInfo, Manager, RunningInfo, VmDraft, VmListItem, VmUpdate};
+use easy_qemu_core::{
+    config, ConsoleInfo, Manager, RunningInfo, SshConfig, VmDraft, VmListItem, VmUpdate,
+};
 use tauri::{AppHandle, Emitter, Manager as _, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -143,6 +145,12 @@ pub async fn close_console(app: AppHandle, id: String) -> CmdResult<()> {
 #[tauri::command]
 pub fn read_log(m: State<'_, Manager>, id: String, lines: Option<u32>) -> String {
     m.log_tail(&id, lines.unwrap_or(400) as usize)
+}
+
+/// Open an SSH session to the VM in an external terminal window.
+#[tauri::command]
+pub fn ssh_connect(m: State<'_, Manager>, id: String) -> CmdResult<SshConfig> {
+    m.ssh_connect(&id).map_err(err)
 }
 
 // ---------- snapshots ----------

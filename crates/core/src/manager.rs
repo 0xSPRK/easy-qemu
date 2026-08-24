@@ -13,8 +13,9 @@ use crate::proxy::ProxyPool;
 use crate::qemu;
 use crate::qmp::Qmp;
 use crate::snapshots;
+use crate::ssh;
 use crate::store::{DeleteReport, RunningInfo, Store};
-use crate::vm::{DisplayMode, Vm, VmDraft};
+use crate::vm::{DisplayMode, SshConfig, Vm, VmDraft};
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -300,6 +301,7 @@ impl Manager {
             net_mode: draft.net_mode,
             net_model: draft.net_model,
             hostfwd: v.hostfwd,
+            ssh: draft.ssh,
         };
         self.store.save_vm(&vm)?;
         Ok(vm)
@@ -324,6 +326,7 @@ impl Manager {
         vm.net_mode = patch.net_mode;
         vm.net_model = patch.net_model;
         vm.hostfwd = patch.hostfwd;
+        vm.ssh = patch.ssh;
         self.store.save_vm(&vm)?;
         Ok(vm)
     }
@@ -426,6 +429,19 @@ impl Manager {
         Ok(())
     }
 
+    // ---------- SSH ----------
+
+    /// Open an SSH session to the VM in an external terminal.
+    /// Returns the connection target that was used.
+    pub fn ssh_connect(&self, id: &str) -> Result<SshConfig> {
+        let vm = self
+            .store
+            .get_vm(id)?
+            .ok_or_else(|| anyhow!("VM '{id}' not found"))?;
+        ssh::launch(&vm.ssh)?;
+        Ok(vm.ssh)
+    }
+
     // ---------- logs ----------
 
     pub fn log_path(&self, id: &str) -> PathBuf {
@@ -523,6 +539,7 @@ mod tests {
             net_mode: NetMode::Nat,
             net_model: NetModel::Auto,
             hostfwd: vec![],
+            ssh: SshConfig::default(),
             disk: DiskSpec::New {
                 size_gb: 1,
                 folder: None,
