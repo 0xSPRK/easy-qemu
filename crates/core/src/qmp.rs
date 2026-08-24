@@ -11,7 +11,7 @@ use tokio::time::timeout;
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Асинхронный QMP-клиент (одно соединение = одна сессия).
+/// Async QMP client (one connection = one session).
 pub struct Qmp {
     reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
@@ -23,10 +23,10 @@ impl Qmp {
         raw.set_nodelay(true).ok();
         let (r, w) = raw.into_split();
         let mut reader = BufReader::new(r);
-        // Greeting от сервера.
+        // Server greeting.
         read_msg(&mut reader).await?;
         let mut q = Qmp { reader, writer: w };
-        // qmp_capabilities обязана быть первой командой.
+        // qmp_capabilities must be the first command.
         q.exec("qmp_capabilities", None).await?;
         Ok(q)
     }
@@ -53,7 +53,7 @@ impl Qmp {
         }
     }
 
-    /// Реальный VNC-порт из `query-vnc` (поле service).
+    /// Actual VNC port from `query-vnc` (the `service` field).
     pub async fn query_vnc_port(&mut self) -> Result<Option<u16>> {
         let ret = match self.exec("query-vnc", None).await {
             Ok(r) => r,
@@ -69,7 +69,7 @@ impl Qmp {
         Ok(port.or_else(|| ret.get("service").and_then(Value::as_u64).map(|p| p as u16)))
     }
 
-    /// Статус гостя: running / paused / shutdown и т.п.
+    /// Guest status: running / paused / shutdown etc.
     pub async fn query_status(&mut self) -> Result<String> {
         let ret = self.exec("query-status", None).await?;
         Ok(ret

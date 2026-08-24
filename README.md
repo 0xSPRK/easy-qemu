@@ -1,49 +1,49 @@
 # Easy QEMU
 
-Кроссплатформенный GUI-менеджер виртуальных машин QEMU (Windows в приоритете, Linux поддерживается).
+Cross-platform GUI manager for QEMU virtual machines (Windows-first, Linux supported).
 
-Tauri 2 + Svelte 5 · ядро на Rust (`crates/core`) · консоль ВМ — встроенный noVNC.
+Tauri 2 + Svelte 5 · Rust core (`crates/core`) · VM console via embedded noVNC.
 
-## Возможности
+## Features
 
-- Создание/редактирование/удаление ВМ (qcow2, ISO, BIOS/UEFI-OVMF, q35/i440fx/microvm)
-- Запуск headless / VNC / GTK / SDL, автоподбор акселератора (WHPX/KVM/TCG)
-- Управление через QMP: пауза, продолжение, сброс, ACPI-выключение, force-stop
-- Консоль в отдельном окне через noVNC (WebSocket-прокси на 127.0.0.1)
-- Проброс портов для user-NET (hostfwd tcp/udp)
-- Снапшоты qcow2 (qemu-img snapshot)
-- Просмотр лога QEMU по каждой ВМ; безопасное удаление только «своих» дисков
+- Create / edit / delete VMs (qcow2, ISO, BIOS/UEFI-OVMF, q35/i440fx/microvm)
+- Headless / VNC / GTK / SDL display modes, automatic accelerator detection (WHPX/KVM/TCG)
+- Control via QMP: pause, resume, reset, ACPI shutdown, force stop
+- Console in a separate window through noVNC (WebSocket proxy on 127.0.0.1)
+- Port forwarding for user-NET networking (hostfwd tcp/udp)
+- qcow2 snapshots (qemu-img snapshot)
+- Per-VM QEMU log viewer; safe deletion of only manager-owned disks
 
-## Структура
+## Layout
 
 ```
-crates/core   ядро без UI: store/config/qemu/qmp/proxy/snapshots/manager
-src-tauri     клей Tauri: команды, события статусов, окна консоли
-ui            фронтенд (Vite + Svelte 5 + TS), noVNC бандлится npm-ом
+crates/core   UI-free core: store/config/qemu/qmp/proxy/snapshots/manager
+src-tauri     Tauri glue: commands, status events, console windows
+ui            frontend (Vite + Svelte 5 + TS); noVNC is bundled via npm
 ```
 
-## Разработка
+## Development
 
-Требования: Rust (MSVC), Node 20+, WebView2 Runtime (есть в Win10/11).
+Requirements: Rust (MSVC), Node 20+, WebView2 Runtime (built into Win10/11).
 
 ```bash
 npm install --prefix ui
-cargo test -p easy-qemu-core      # тесты ядра
-npm run tauri dev                 # запуск в режиме разработки
+cargo test -p easy-qemu-core      # core tests
+npm run tauri dev                 # run in development mode
 ```
 
-## Сборка
+## Build
 
 ```bash
-npm run tauri build               # NSIS-инсталлятор в src-tauri/target/release/bundle/
+npm run tauri build               # NSIS installer in src-tauri/target/release/bundle/
 ```
 
-## Расположение данных
+## Data locations
 
-- Конфиг: `%APPDATA%/easy-qemu/config.toml` (Linux: `~/.config/easy-qemu`)
-- Записи ВМ: `<config>/vms/*.json`, состояние: `running.json`
-- Диски и логи: каталог из настроек (по умолчанию `<config>/disks`)
+- Config: `%APPDATA%/easy-qemu/config.toml` (Linux: `~/.config/easy-qemu`)
+- VM records: `<config>/vms/*.json`, runtime state: `running.json`
+- Disks and logs: directory from settings (default `<config>/disks`)
 
-## Лицензия
+## License
 
 MIT

@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-/// Один WS→TCP прокси (websockify) на конкретную ВМ.
+/// A single WS→TCP proxy (websockify) for one VM.
 struct Srv {
     port: u16,
     stop_tx: watch::Sender<bool>,
@@ -26,11 +26,12 @@ struct Target {
     vnc_port: u16,
 }
 
-/// Пул websockify-прокси по id ВМ.
+/// Pool of websockify proxies keyed by VM id.
 ///
-/// Задачи исполняются в текущем tokio-runtime, если он есть (Tauri/тесты);
-/// иначе лениво создаётся собственный. Статические файлы noVNC не раздаёт —
-/// RFB-библиотека бандлится фронтендом, сюда ходит только WebSocket.
+/// Tasks run on the ambient tokio runtime when one exists (Tauri/tests);
+/// otherwise a lazily created owned runtime is used. Static noVNC files are
+/// NOT served — the RFB library is bundled by the frontend, only the
+/// WebSocket endpoint lives here.
 pub struct ProxyPool {
     owned_rt: Option<tokio::runtime::Runtime>,
     servers: HashMap<String, Srv>,
@@ -49,7 +50,7 @@ impl ProxyPool {
         self.servers.contains_key(id)
     }
 
-    /// Запускает прокси, если его ещё нет; возвращает порт.
+    /// Starts the proxy if it is not running yet; returns the port.
     pub async fn ensure(&mut self, id: &str, vnc_host: String, vnc_port: u16) -> Result<u16> {
         if let Some(s) = self.servers.get(id) {
             return Ok(s.port);
@@ -105,7 +106,7 @@ impl ProxyPool {
                     .thread_name("eq-proxy")
                     .enable_all()
                     .build()
-                    .expect("не удалось создать tokio runtime для websockify"),
+                    .expect("failed to create tokio runtime for websockify"),
             );
         }
         self.owned_rt.as_ref().unwrap()
@@ -136,7 +137,7 @@ impl Default for ProxyPool {
 impl Drop for ProxyPool {
     fn drop(&mut self) {
         self.shutdown_all();
-        // Не дропаем собственный runtime из чужого async-контекста — отдаём ОС.
+        // Do not drop our own runtime from someone else's async context — let the OS reclaim it.
         if let Some(rt) = self.owned_rt.take() {
             std::mem::forget(rt);
         }

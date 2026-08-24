@@ -2,7 +2,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, Result};
 
-/// Имя образа процесса по PID (для проверки перед kill).
+/// Process image name by PID (checked before killing).
 /// Windows: `tasklist /FI "PID eq N"`; Unix: `/proc/<pid>/comm`.
 fn process_image_name(pid: i32) -> Option<String> {
     #[cfg(windows)]
@@ -36,20 +36,20 @@ pub fn is_alive(pid: i32, expect_prefix: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Принудительное завершение процесса ТОЛЬКО если это ожидаемый бинарник.
-/// Защита от убийства чужого процесса после переиспользования PID.
+/// Force-terminate a process ONLY if it is the expected binary.
+/// Protects against killing an unrelated process after PID reuse.
 pub fn kill_force(pid: i32, expect_prefix: &str) -> Result<()> {
     match process_image_name(pid) {
         Some(name) => {
             if !name.to_lowercase().starts_with(&expect_prefix.to_lowercase()) {
                 return Err(anyhow!(
-                    "PID {pid} теперь принадлежит '{name}', а не '{expect_prefix}*'. \
-                     Процесс не будет остановлен."
+                    "PID {pid} now belongs to '{name}', not '{expect_prefix}*. \
+                     The process will not be stopped."
                 ));
             }
         }
         None => {
-            // Процесс уже не существует — считать успехом.
+            // The process no longer exists — treat as success.
             return Ok(());
         }
     }
@@ -62,7 +62,7 @@ pub fn kill_force(pid: i32, expect_prefix: &str) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow!("Не удалось завершить процесс {pid}"))
+        Err(anyhow!("Failed to terminate process {pid}"))
     }
 }
 
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn own_process_name_mismatch_is_refused() {
-        // Текущий процесс — cargo/test, не qemu: kill должен отказаться.
+        // The current process is cargo/test, not qemu: kill must refuse.
         let pid = std::process::id() as i32;
         assert!(!is_alive(pid, "qemu-system"));
         assert!(kill_force(pid, "qemu-system").is_err());

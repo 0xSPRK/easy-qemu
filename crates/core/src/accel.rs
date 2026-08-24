@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::vm::Accel;
 
-/// Какие акселераторы поддерживает конкретный бинарник QEMU.
+/// Accelerators supported by a specific QEMU binary.
 #[derive(Clone, Debug, Default)]
 pub struct AccelSupport {
     known: HashSet<String>,
@@ -15,8 +15,8 @@ impl AccelSupport {
     }
 }
 
-/// Разбор вывода `qemu-system-x86_64 -accel help`.
-/// Строки вида: `kvm`, `tcg` либо `whpx: Windows Hypervisor Platform support`.
+/// Parse the output of `qemu-system-x86_64 -accel help`.
+/// Lines look like: `kvm`, `tcg` or `whpx: Windows Hypervisor Platform support`.
 pub fn parse_accel_help(output: &str) -> AccelSupport {
     let mut known = HashSet::new();
     for line in output.lines() {
@@ -28,8 +28,8 @@ pub fn parse_accel_help(output: &str) -> AccelSupport {
         if token.is_empty() {
             continue;
         }
-        // Заголовки вроде "Accelerators supported by QEMU binary:" отфильтруются
-        // проверкой на одиночное слово без пробелов.
+        // Headers like "Accelerators supported by QEMU binary:" are filtered out
+        // by the single-word-without-spaces check.
         if token.chars().all(|c| c.is_ascii_alphanumeric()) && token.len() <= 16 {
             known.insert(token);
         }
@@ -37,7 +37,7 @@ pub fn parse_accel_help(output: &str) -> AccelSupport {
     AccelSupport { known }
 }
 
-/// Запрос поддержки у бинарника QEMU. При ошибке запуска — пустой набор.
+/// Ask the QEMU binary for its supported accelerators. On spawn failure — empty set.
 pub fn probe(qemu_bin: &Path) -> AccelSupport {
     let out = std::process::Command::new(qemu_bin)
         .args(["-accel", "help"])
@@ -55,7 +55,7 @@ pub fn probe(qemu_bin: &Path) -> AccelSupport {
     }
 }
 
-/// Разрешение `Auto` с учётом платформы и реально поддерживаемых акселераторов.
+/// Resolve `Auto` taking the platform and actually supported accelerators into account.
 pub fn effective(accel: Accel, support: &AccelSupport) -> Accel {
     match accel {
         Accel::Auto => {

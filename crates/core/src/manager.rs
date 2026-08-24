@@ -35,7 +35,7 @@ impl Status {
     }
 }
 
-/// ВМ + статус для списка.
+/// VM + status for the list view.
 #[derive(Serialize, Clone)]
 pub struct VmListItem {
     #[serde(flatten)]
@@ -43,7 +43,7 @@ pub struct VmListItem {
     pub status: Status,
 }
 
-/// Снимок состояния одной ВМ для события в UI.
+/// State snapshot of a single VM for a UI event.
 #[derive(Serialize, Clone, Debug)]
 pub struct VmUpdate {
     pub id: String,
@@ -62,8 +62,7 @@ pub struct ConsoleInfo {
     pub vnc_port: u16,
 }
 
-#[allow(dead_code)] // варианты используются в src-tauri
-pub enum QmpAction {
+enum QmpAction {
     Pause,
     Resume,
     Reset,
@@ -86,7 +85,7 @@ pub struct Manager {
     storage: PathBuf,
     store: Store,
     cfg: RwLock<Config>,
-    /// Предупреждения загрузки конфига (битый TOML и т.п.), сбрасываются при сохранении настроек.
+    /// Config load warnings (broken TOML etc.), cleared when settings are saved.
     config_warnings: RwLock<Vec<String>>,
     accel_cache: RwLock<Option<(PathBuf, AccelSupport)>>,
     running: Mutex<HashMap<String, RunningInfo>>,
@@ -123,7 +122,7 @@ impl Manager {
         &self.base
     }
 
-    // ---------- конфиг ----------
+    // ---------- config ----------
 
     pub async fn get_config(&self) -> Config {
         self.cfg.read().await.clone()
@@ -152,7 +151,7 @@ impl Manager {
         sup
     }
 
-    // ---------- список и статусы ----------
+    // ---------- list and statuses ----------
 
     pub async fn list(&self) -> Result<Vec<VmListItem>> {
         let vms = self.store.list_vms()?;
@@ -166,7 +165,7 @@ impl Manager {
             .collect())
     }
 
-    /// Полный срез состояний всех ВМ. Заодно чистит умершие записи.
+    /// Full state snapshot of all VMs. Also cleans up dead entries.
     pub async fn refresh(&self) -> Result<Vec<VmUpdate>> {
         let probes: Vec<(String, u16)> = self
             .running
@@ -185,14 +184,16 @@ impl Manager {
                 },
                 Err(_) => Status::Shutoff,
             };
-            let mut run = self.running.lock().await;
-            let mut stat = self.statuses.lock().await;
-            stat.insert(id.clone(), st);
-            if st == Status::Shutoff {
-                if run.remove(&id).is_some() {
+            {
+                let mut run = self.running.lock().await;
+                let mut stat = self.statuses.lock().await;
+                stat.insert(id.clone(), st);
+                if st == Status::Shutoff && run.remove(&id).is_some() {
                     changed = true;
                     let _ = std::fs::remove_file(self.storage.join(format!("{id}.pid")));
                 }
+            }
+            if st == Status::Shutoff {
                 let _ = self.proxies.lock().await.stop(&id);
             }
         }
@@ -204,7 +205,7 @@ impl Manager {
         Ok(self.snapshot_updates().await)
     }
 
-    /// Текущее состояние без обращения к QMP.
+    /// Current state without touching QMP.
     async fn snapshot_updates(&self) -> Vec<VmUpdate> {
         let vms = self.store.list_vms().unwrap_or_default();
         let run = self.running.lock().await;
@@ -231,12 +232,12 @@ impl Manager {
             .collect()
     }
 
-    // ---------- жизненный цикл ВМ ----------
+    // ---------- VM lifecycle ----------
 
     async fn find_vm(&self, id: &str) -> Result<Vm> {
         self.store
             .get_vm(id)?
-            .ok_or_else(|| anyhow!("ВМ '{id}' не найдена"))
+            .ok_or_else(|| anyhow!("VM '{id}' not found"))
     }
 
     pub async fn create(&self, draft: VmDraft) -> Result<Vm> {
@@ -246,12 +247,11 @@ impl Manager {
         let (disk_path, disk_size_gb) = match &v.disk {
             crate::vm::DiskSpec::New { size_gb, folder } => {
                 let folder = match folder.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                    Some(f) => PathBuf::from(f),
-                    None => cfg.storage_dir(&self.base),
-                }
-                .join(&v.name);
+                    Some(f) => PathBuf::from(f).join(&v.name),
+                    None => cfg.storage_dir(&self.base).join(&v.name),
+                };
                 std::fs::create_dir_all(&folder)
-                    .map_err(|e| anyhow!("Не удалось создать папку диска {}: {e}", folder.display()))?;
+                    .map_err(|e| anyhow!("Failed to create disk folder {}: {e}", folder.display()))?;
                 let id_tmp = gen_id();
                 (folder.join(format!("{id_tmp}.qcow2")), *size_gb)
             }
@@ -263,7 +263,7 @@ impl Manager {
                     .map(|e| e.eq_ignore_ascii_case("qcow2"))
                     .unwrap_or(false);
                 if !is_qcow2 {
-                    bail!("Поддерживаются только диски в формате qcow2");
+                    bail!("Only disks in the qcow2 format are supported");
                 }
                 (p, 0)
             }
@@ -300,11 +300,11 @@ impl Manager {
         Ok(vm)
     }
 
-    /// Обновление настроек ВМ. Поля диска не меняются.
+    /// Update VM settings. Disk fields are immutable.
     pub async fn update(&self, patch: Vm) -> Result<Vm> {
         let mut vm = self.find_vm(&patch.id).await?;
         if self.running.lock().await.contains_key(&patch.id) {
-            bail!("Остановите ВМ перед редактированием");
+            bail!("Stop the VM before editing");
         }
         vm.name = patch.name;
         vm.memory_mb = patch.memory_mb;
@@ -337,12 +337,12 @@ impl Manager {
         {
             let run = self.running.lock().await;
             if run.contains_key(id) {
-                bail!("ВМ уже запущена");
+                bail!("VM is already running");
             }
         }
         let vm = self.find_vm(id).await?;
         if !vm.disk_path.exists() {
-            bail!("Файл диска не найден: {}", vm.disk_path.display());
+            bail!("Disk file not found: {}", vm.disk_path.display());
         }
         let cfg = self.cfg.read().await.clone();
         let bin = qemu::resolve_binary("qemu-system-x86_64", &cfg.qemu_binary)?;
@@ -361,7 +361,7 @@ impl Manager {
     pub async fn qmp_action(&self, id: &str, action: QmpAction) -> Result<()> {
         let info = {
             let run = self.running.lock().await;
-            run.get(id).cloned().ok_or_else(|| anyhow!("ВМ не запущена"))?
+            run.get(id).cloned().ok_or_else(|| anyhow!("VM is not running"))?
         };
         let mut q = Qmp::connect(qemu::qmp_addr(info.qmp_port)).await?;
         q.exec(action.cmd(), None).await?;
@@ -371,9 +371,10 @@ impl Manager {
     pub async fn force_stop(&self, id: &str) -> Result<()> {
         let info = {
             let mut run = self.running.lock().await;
-            run.remove(id).ok_or_else(|| anyhow!("ВМ не запущена"))?
+            run.remove(id).ok_or_else(|| anyhow!("VM is not running"))?
         };
         let res = process::kill_force(info.pid, "qemu-system");
+        let _ = self.proxies.lock().await.stop(id);
         {
             let run = self.running.lock().await;
             self.statuses.lock().await.insert(id.to_string(), Status::Shutoff);
@@ -383,19 +384,19 @@ impl Manager {
         res
     }
 
-    // ---------- консоль / прокси ----------
+    // ---------- console / proxy ----------
 
     pub async fn open_console(&self, id: &str) -> Result<ConsoleInfo> {
         let info = {
             let run = self.running.lock().await;
-            run.get(id).cloned().ok_or_else(|| anyhow!("ВМ не запущена"))?
+            run.get(id).cloned().ok_or_else(|| anyhow!("VM is not running"))?
         };
         if info.display != DisplayMode::Vnc {
-            bail!("Консоль доступна только для ВМ с VNC-дисплеем");
+            bail!("The console is available only for VMs with a VNC display");
         }
         let vnc_port = info
             .effective_vnc_port()
-            .ok_or_else(|| anyhow!("VNC-порт неизвестен — подождите пару секунд"))?;
+            .ok_or_else(|| anyhow!("VNC port unknown — wait a couple of seconds"))?;
         let ws_port = self
             .proxies
             .lock()
@@ -410,7 +411,7 @@ impl Manager {
         Ok(())
     }
 
-    // ---------- логи ----------
+    // ---------- logs ----------
 
     pub fn log_path(&self, id: &str) -> PathBuf {
         self.base.join(format!("{id}.log"))
@@ -420,11 +421,11 @@ impl Manager {
         qemu::log_tail(&self.log_path(id), max_lines)
     }
 
-    // ---------- снапшоты ----------
+    // ---------- snapshots ----------
 
     async fn img_bin_offline_vm(&self, id: &str) -> Result<(PathBuf, Vm)> {
         if self.running.lock().await.contains_key(id) {
-            bail!("Операции со снапшотами требуют выключенной ВМ");
+            bail!("Snapshot operations require the VM to be powered off");
         }
         let vm = self.find_vm(id).await?;
         let cfg = self.cfg.read().await;
@@ -452,7 +453,7 @@ impl Manager {
         snapshots::delete(&img, &vm.disk_path, name).await
     }
 
-    // ---------- утилиты для UI ----------
+    // ---------- helpers for the UI ----------
 
     pub fn uptime_secs(started_at: Option<u64>) -> u64 {
         started_at

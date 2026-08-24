@@ -32,9 +32,8 @@ struct RawSnap {
 }
 
 fn format_date(sec: i64, nsec: i64) -> Option<String> {
-    // Без внешних крейтов: ISO из epoch через chrono-free расчёт невозможен точно
-    // (високосные годы), поэтому используем простой формат epoch-секунд.
-    // Для UI достаточно сортируемого представления.
+    // Without external crates an exact epoch->ISO conversion is non-trivial
+    // (leap years), so a plain sortable epoch-seconds representation is used.
     let _ = nsec;
     Some(format!("{sec}"))
 }
@@ -59,7 +58,7 @@ pub async fn list(img_bin: &Path, disk: &Path) -> Result<Vec<SnapInfo>> {
     let (stdout, _) =
         run_qemu_img(img_bin, &["snapshot", "-l", "--output=json", &disk_s]).await?;
     let raw: RawList = serde_json::from_str(stdout.trim())
-        .map_err(|e| anyhow!("Не удалось разобрать список снапшотов: {e}"))?;
+        .map_err(|e| anyhow!("Failed to parse the snapshot list: {e}"))?;
     Ok(raw
         .snapshots
         .into_iter()
@@ -77,11 +76,11 @@ pub async fn list(img_bin: &Path, disk: &Path) -> Result<Vec<SnapInfo>> {
 fn valid_snapshot_name(name: &str) -> Result<&str> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(anyhow!("Имя снапшота не может быть пустым"));
+        return Err(anyhow!("Snapshot name cannot be empty"));
     }
     if name.len() > 60 || !name.chars().all(|c| c.is_alphanumeric() || "-_ .".contains(c)) {
         return Err(anyhow!(
-            "Имя снапшота: буквы, цифры, пробел и символы - _ . (до 60 символов)"
+            "Snapshot name: letters, digits, space and - _ . characters (up to 60 chars)"
         ));
     }
     Ok(name)

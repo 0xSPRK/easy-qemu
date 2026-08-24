@@ -16,7 +16,7 @@ pub fn resolve_binary(name: &str, override_path: &Option<PathBuf>) -> Result<Pat
             return Ok(p.clone());
         }
         return Err(anyhow!(
-            "Бинарный файл '{name}' не найден по пути: {}",
+            "Binary '{name}' not found at: {}",
             p.display()
         ));
     }
@@ -34,7 +34,7 @@ pub fn resolve_binary(name: &str, override_path: &Option<PathBuf>) -> Result<Pat
     }
 
     Err(anyhow!(
-        "Не удалось найти '{name}'. Добавьте его в PATH или укажите путь в настройках."
+        "Could not find '{name}'. Add it to PATH or set the path in settings."
     ))
 }
 
@@ -51,7 +51,7 @@ fn search_in_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Свободный TCP-порт для QMP. Возможную гонку закрывает retry-цикл подключения.
+/// Free TCP port for QMP. Any race is closed by the connect retry loop.
 pub fn free_tcp_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -117,7 +117,7 @@ pub fn build_qemu_args(
     match vm.cpu {
         CpuModel::Auto => {}
         CpuModel::Max => a.extend(["-cpu".into(), "max".into()]),
-        // `-cpu host` валиден только под KVM; для WHPX/TCG используем max.
+        // `-cpu host` is only valid under KVM; use max for WHPX/TCG.
         CpuModel::Host => {
             let model = if accel_resolved == Accel::Kvm { "host" } else { "max" };
             a.extend(["-cpu".into(), model.into()]);
@@ -134,9 +134,9 @@ pub fn build_qemu_args(
     match vm.display {
         DisplayMode::None => a.extend(["-display".into(), "none".into()]),
         DisplayMode::Vnc => {
-            // Динамический подбор свободного порта: стартуем от подсказки,
-            // QEMU сам найдёт первый свободный в диапазоне; реальный порт
-            // уточняем через QMP query-vnc.
+            // Dynamic free-port selection: start from the hint display number,
+            // QEMU picks the first free port in the range; the actual port is
+            // resolved via QMP query-vnc.
             let start = vm.vnc_display.unwrap_or(0);
             a.extend([
                 "-vnc".into(),
@@ -180,7 +180,7 @@ pub fn build_qemu_args(
     Ok(a)
 }
 
-/// Находит OVMF (UEFI) образы: CODE (только чтение) и VARS (шаблон для копии на ВМ).
+/// Locate OVMF (UEFI) images: CODE (read-only) and VARS (template copied per VM).
 fn find_ovmf() -> Option<(PathBuf, PathBuf)> {
     let candidates: &[(&str, &str)] = &[
         ("OVMF_CODE.fd", "OVMF_VARS.fd"),
@@ -210,7 +210,7 @@ fn find_ovmf() -> Option<(PathBuf, PathBuf)> {
 
 fn setup_uefi(vm: &Vm, a: &mut Vec<String>) -> Result<()> {
     let (code, vars_tmpl) = find_ovmf()
-        .ok_or_else(|| anyhow!("UEFI запрошен, но OVMF не найден (OVMF_CODE.fd / OVMF_VARS.fd)."))?;
+        .ok_or_else(|| anyhow!("UEFI requested but OVMF was not found (OVMF_CODE.fd / OVMF_VARS.fd)."))?;
 
     let vars_path = vm
         .disk_path
@@ -220,7 +220,7 @@ fn setup_uefi(vm: &Vm, a: &mut Vec<String>) -> Result<()> {
 
     if !vars_path.exists() {
         if let Err(e) = std::fs::copy(&vars_tmpl, &vars_path) {
-            return Err(anyhow!("Не удалось скопировать OVMF VARS: {e}"));
+            return Err(anyhow!("Failed to copy OVMF VARS: {e}"));
         }
     }
 
@@ -250,7 +250,7 @@ fn open_log(path: &Path) -> std::fs::File {
     }
 }
 
-/// Последние `max_lines` строк лога (для показа ошибки старта).
+/// Last `max_lines` lines of a log file (used to surface startup errors).
 pub fn log_tail(path: &Path, max_lines: usize) -> String {
     let Ok(s) = std::fs::read_to_string(path) else {
         return String::new();
@@ -263,8 +263,8 @@ pub fn log_tail(path: &Path, max_lines: usize) -> String {
 #[cfg(windows)]
 const DETACHED_FLAGS: u32 = 0x0000_0008 | 0x0000_0200; // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 
-/// Запуск QEMU + ожидание готовности (pidfile и QMP).
-/// При ранней смерти процесса ошибка содержит хвост лога.
+/// Spawn QEMU and wait until it is ready (pidfile + QMP).
+/// If the process dies early the error includes the tail of its log.
 pub async fn start_vm(
     store: &Store,
     vm: &Vm,
@@ -290,11 +290,11 @@ pub async fn start_vm(
 
     let mut child = cmd
         .spawn()
-        .with_context(|| format!("не удалось запустить {}", bin.display()))?;
+        .with_context(|| format!("failed to launch {}", bin.display()))?;
 
     let pid = wait_for_pidfile(&mut child, &vm.pidfile_path(), &log_path).await?;
 
-    // Ждём готовности QMP и узнаём реальный VNC-порт.
+    // Wait for QMP readiness and resolve the actual VNC port.
     let mut vnc_port = None;
     for _ in 0..10 {
         match Qmp::connect(qmp_addr(qmp_port)).await {
@@ -335,9 +335,9 @@ async fn wait_for_pidfile(
             let tail_str = if tail.trim().is_empty() {
                 String::new()
             } else {
-                format!("\n\nХвост лога:\n{tail}")
+                format!("\n\nLog tail:\n{tail}")
             };
-            anyhow::bail!("QEMU завершился сразу после запуска ({status}).{tail_str}");
+            anyhow::bail!("QEMU exited immediately after start ({status}).{tail_str}");
         }
         if pidfile.exists() {
             return read_pidfile(pidfile);
@@ -346,21 +346,21 @@ async fn wait_for_pidfile(
     }
     let _ = child.kill();
     anyhow::bail!(
-        "QEMU не создал pidfile за 10 секунд.\nХвост лога:\n{}",
+        "QEMU did not create a pidfile within 10 seconds.\nLog tail:\n{}",
         log_tail(log_path, 30)
     )
 }
 
 fn read_pidfile(path: &Path) -> Result<i32> {
     let s = std::fs::read_to_string(path)
-        .with_context(|| format!("не удалось прочитать pidfile {}", path.display()))?;
+        .with_context(|| format!("failed to read pidfile {}", path.display()))?;
     s.lines()
         .next()
         .and_then(|l| l.trim().parse::<i32>().ok())
-        .ok_or_else(|| anyhow!("pidfile не содержит корректный PID"))
+        .ok_or_else(|| anyhow!("pidfile does not contain a valid PID"))
 }
 
-/// Создание qcow2-диска через qemu-img (асинхронно, без окна консоли на Windows).
+/// Create a qcow2 disk via qemu-img (async, no console window on Windows).
 pub async fn create_disk(img_bin: &Path, path: &Path, size_gb: u32) -> Result<()> {
     let mut cmd = tokio::process::Command::new(img_bin);
     cmd.args(["create", "-f", "qcow2"])
@@ -373,7 +373,7 @@ pub async fn create_disk(img_bin: &Path, path: &Path, size_gb: u32) -> Result<()
     let out = cmd.output().await?;
     if !out.status.success() {
         return Err(anyhow!(
-            "qemu-img завершился с ошибкой: {}",
+            "qemu-img failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
@@ -432,7 +432,7 @@ mod tests {
         assert!(joined.contains("-boot d"));
         assert!(joined.contains("socket,host=127.0.0.1,port=5555,server=on,wait=off,id=qmp0"));
         assert!(joined.contains("-mon chardev=qmp0,mode=control"));
-        // Динамический VNC: подсказка 3 + диапазон поиска.
+        // Dynamic VNC: hint display 3 + search range.
         assert!(joined.contains("-vnc 127.0.0.1:3,to=20"));
     }
 

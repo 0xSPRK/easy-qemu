@@ -12,7 +12,7 @@ pub struct Config {
     pub theme: Option<String>,
 }
 
-/// Конфиг + предупреждения о проблемах файла (показываются в настройках UI).
+/// Config + warnings about file problems (shown in the UI settings).
 pub struct LoadedConfig {
     pub config: Config,
     pub warnings: Vec<String>,
@@ -37,21 +37,21 @@ impl Config {
         match std::fs::read_to_string(&p) {
             Err(e) => LoadedConfig {
                 config: Config::default(),
-                warnings: vec![format!("Не удалось прочитать config.toml: {e}")],
+                warnings: vec![format!("Failed to read config.toml: {e}")],
             },
             Ok(s) => match toml::from_str::<Config>(&s) {
                 Ok(c) => LoadedConfig { config: c, warnings: vec![] },
                 Err(e) => LoadedConfig {
                     config: Config::default(),
                     warnings: vec![format!(
-                        "Не удалось разобрать config.toml ({e}); используются значения по умолчанию"
+                        "Failed to parse config.toml ({e}); using default values"
                     )],
                 },
             },
         }
     }
 
-    /// Атомарная запись: tmp + rename.
+    /// Atomic write: tmp + rename.
     pub fn save(&self, base: &Path) -> Result<()> {
         let p = Config::path(base);
         let tmp = base.join(".config.toml.tmp");

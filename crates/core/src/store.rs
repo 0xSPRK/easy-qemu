@@ -11,13 +11,13 @@ pub struct RunningInfo {
     pub id: String,
     pub pid: i32,
     pub qmp_port: u16,
-    /// Легаси-подсказка дисплея (порт 5900+N) из старых записей.
+    /// Legacy display-number hint (port 5900+N) from older records.
     pub vnc_display: Option<u16>,
-    /// Реальный VNC-порт, полученный через QMP query-vnc после старта.
+    /// Actual VNC port obtained via QMP query-vnc after start.
     #[serde(default)]
     pub vnc_port: Option<u16>,
     pub display: DisplayMode,
-    /// Epoch-seconds старта процесса (для аптайма).
+    /// Process start time in epoch seconds (for uptime).
     #[serde(default)]
     pub started_at: Option<u64>,
 }
@@ -28,15 +28,15 @@ impl RunningInfo {
     }
 }
 
-/// Результат удаления ВМ — что реально произошло с файлами.
+/// VM deletion result — what actually happened to the files.
 #[derive(Serialize, Clone, Debug)]
 pub struct DeleteReport {
     pub json_removed: bool,
     pub pidfile_removed: bool,
-    /// Пытался ли удалить файл диска.
+    /// Whether a disk file removal was attempted.
     pub disk_attempted: bool,
     pub disk_deleted: bool,
-    /// Ошибки удаления (например, файл занят процессом) — показываются в UI.
+    /// Deletion errors (e.g. file locked by a process) — shown in the UI.
     pub errors: Vec<String>,
 }
 
@@ -82,7 +82,7 @@ impl Store {
         Ok(Some(serde_json::from_str(&s)?))
     }
 
-    /// Атомарная запись: tmp + rename.
+    /// Atomic write: tmp + rename.
     pub fn save_vm(&self, vm: &Vm) -> Result<()> {
         let p = self.vms_dir.join(format!("{}.json", vm.id));
         let tmp = self.vms_dir.join(format!(".{}.json.tmp", vm.id));
@@ -91,8 +91,8 @@ impl Store {
         Ok(())
     }
 
-    /// Удаление ВМ. Файл диска трогается ТОЛЬКО если он создан менеджером
-    /// (`disk_owned`) и пользователь подтвердил удаление.
+    /// Delete a VM. The disk file is touched ONLY if it was created by the
+    /// manager (`disk_owned`) and the user confirmed deletion.
     pub fn delete_vm(&self, id: &str, delete_disk: bool) -> Result<DeleteReport> {
         let mut report = DeleteReport {
             json_removed: false,
@@ -111,10 +111,10 @@ impl Store {
                         Ok(_) => report.disk_deleted = true,
                         Err(e) => report
                             .errors
-                            .push(format!("Не удалось удалить диск {}: {e}", vm.disk_path.display())),
+                            .push(format!("Failed to delete disk {}: {e}", vm.disk_path.display())),
                     }
                 } else {
-                    report.disk_deleted = true; // уже отсутствует — цель достигнута
+                    report.disk_deleted = true; // already absent — goal achieved
                 }
             }
         }
@@ -128,7 +128,7 @@ impl Store {
         if p.exists() {
             match std::fs::remove_file(&p) {
                 Ok(_) => report.json_removed = true,
-                Err(e) => report.errors.push(format!("Не удалось удалить запись ВМ: {e}")),
+                Err(e) => report.errors.push(format!("Failed to remove the VM record: {e}")),
             }
         } else {
             report.json_removed = true;

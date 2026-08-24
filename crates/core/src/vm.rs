@@ -44,10 +44,10 @@ impl DisplayMode {
 
     pub fn label(&self) -> &'static str {
         match self {
-            DisplayMode::None => "none (headless)",
-            DisplayMode::Vnc => "vnc (remote)",
-            DisplayMode::Gtk => "gtk (window)",
-            DisplayMode::Sdl => "sdl (window)",
+            DisplayMode::None => "headless",
+            DisplayMode::Vnc => "vnc",
+            DisplayMode::Gtk => "gtk window",
+            DisplayMode::Sdl => "sdl window",
         }
     }
 }
@@ -55,14 +55,14 @@ impl DisplayMode {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MachineType {
-    /// Не передавать `-machine` (дефолт QEMU).
+    /// Don't pass `-machine` (QEMU default).
     #[default]
     Auto,
-    /// Современный чипсет ICH9: PCIe, AHCI, UEFI, virtio.
+    /// Modern ICH9 chipset: PCIe, AHCI, UEFI, virtio.
     Q35,
-    /// Легаси-чипсет PIIX (только для старых гостей).
+    /// Legacy PIIX chipset (old guests only).
     I440Fx,
-    /// Минималистичная платформа (только headless/virtio).
+    /// Minimal platform (headless/virtio only).
     MicroVm,
 }
 
@@ -76,10 +76,10 @@ impl MachineType {
 
     pub fn label(&self) -> &'static str {
         match self {
-            MachineType::Auto => "авто (дефолт QEMU)",
-            MachineType::Q35 => "q35 (современный)",
-            MachineType::I440Fx => "i440fx (легаси)",
-            MachineType::MicroVm => "microvm (мини)",
+            MachineType::Auto => "auto (QEMU default)",
+            MachineType::Q35 => "q35 (modern)",
+            MachineType::I440Fx => "i440fx (legacy)",
+            MachineType::MicroVm => "microvm (minimal)",
         }
     }
 
@@ -130,7 +130,7 @@ impl CpuModel {
 
     pub fn label(&self) -> &'static str {
         match self {
-            CpuModel::Auto => "авто",
+            CpuModel::Auto => "auto",
             CpuModel::Max => "max",
             CpuModel::Host => "host",
         }
@@ -140,12 +140,12 @@ impl CpuModel {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NetMode {
-    /// Пользовательская сеть SLIRP (NAT через хост, без прав администратора).
+    /// SLIRP user networking (NAT through the host, no admin rights needed).
     #[default]
     Nat,
-    /// Мост в локальную сеть через TAP-адаптер хоста.
+    /// Bridge into the LAN via a host TAP adapter.
     Bridged,
-    /// Сетевая карта не добавляется.
+    /// No NIC attached.
     None,
 }
 
@@ -155,8 +155,8 @@ impl NetMode {
     pub fn label(&self) -> &'static str {
         match self {
             NetMode::Nat => "nat (user)",
-            NetMode::Bridged => "мост (tap)",
-            NetMode::None => "нет",
+            NetMode::Bridged => "bridged (tap)",
+            NetMode::None => "none",
         }
     }
 }
@@ -164,14 +164,14 @@ impl NetMode {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NetModel {
-    /// Без `model=` — дефолт QEMU (e1000), сохраняет старое поведение.
+    /// No `model=` — QEMU default (e1000), keeps legacy behavior.
     #[default]
     Auto,
-    /// Паравиртуальная virtio-сеть (Linux).
+    /// Paravirtual virtio NIC (Linux guests).
     Virtio,
-    /// Intel e1000 (Windows без драйверов virtio).
+    /// Intel e1000 (Windows without virtio drivers).
     E1000,
-    /// Realtek rtl8139 (старые гости).
+    /// Realtek rtl8139 (old guests).
     Rtl8139,
 }
 
@@ -181,7 +181,7 @@ impl NetModel {
 
     pub fn label(&self) -> &'static str {
         match self {
-            NetModel::Auto => "авто (e1000)",
+            NetModel::Auto => "auto (e1000)",
             NetModel::Virtio => "virtio-net",
             NetModel::E1000 => "e1000",
             NetModel::Rtl8139 => "rtl8139",
@@ -215,7 +215,7 @@ impl FwdProto {
     }
 }
 
-/// Правило проброса порта для user-NET: `-nic user,hostfwd=tcp::2222-:22`.
+/// Port forwarding rule for user-NET: `-nic user,hostfwd=tcp::2222-:22`.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HostFwd {
     pub proto: FwdProto,
@@ -225,7 +225,12 @@ pub struct HostFwd {
 
 impl HostFwd {
     pub fn qemu_fragment(&self) -> String {
-        format!("hostfwd={p}::{hp}-:{gp}", p = self.proto.qemu_str(), hp = self.host_port, gp = self.guest_port)
+        format!(
+            "hostfwd={p}::{hp}-:{gp}",
+            p = self.proto.qemu_str(),
+            hp = self.host_port,
+            gp = self.guest_port
+        )
     }
 }
 
@@ -237,14 +242,14 @@ pub struct Vm {
     pub cpus: u32,
     pub disk_size_gb: u32,
     pub disk_path: PathBuf,
-    /// Диск создан этим менеджером и его можно удалять вместе с ВМ.
-    /// У записей до v0.2 поле отсутствует — для совместимости считается true.
+    /// The disk was created by this manager and may be deleted together with the VM.
+    /// Records older than v0.2 lack this field — treated as true for compatibility.
     #[serde(default = "true_default")]
     pub disk_owned: bool,
     pub iso: Option<PathBuf>,
     pub accel: Accel,
     pub display: DisplayMode,
-    /// Предпочитаемый номер VNC-дисплея (порт 5900+N). Реальный порт уточняется через QMP.
+    /// Preferred VNC display number (port 5900+N). The actual port is resolved via QMP.
     pub vnc_display: Option<u16>,
     #[serde(default)]
     pub machine: MachineType,
@@ -273,7 +278,7 @@ impl Vm {
     }
 }
 
-/// Данные формы создания ВМ до валидации.
+/// VM creation form data before validation.
 #[derive(Deserialize, Clone, Debug)]
 pub struct VmDraft {
     pub name: String,
@@ -299,7 +304,7 @@ pub enum DiskSpec {
     Existing { path: String },
 }
 
-/// Проверенная часть драфта, из которой собирается ВМ.
+/// Validated draft used to build a VM.
 #[derive(Clone, Debug)]
 pub struct ValidatedDraft {
     pub name: String,
@@ -311,31 +316,31 @@ pub struct ValidatedDraft {
 }
 
 impl VmDraft {
-    /// Валидация полей формы. Ошибки — человекочитаемые, на русском (показываются в UI).
+    /// Form field validation. Errors are human-readable and shown in the UI.
     pub fn validate(&self) -> Result<ValidatedDraft> {
         let name = self.name.trim().to_string();
         if name.is_empty() {
-            bail!("Имя не может быть пустым");
+            bail!("Name cannot be empty");
         }
         if self.memory_mb == 0 {
-            bail!("Память (МБ) должна быть числом > 0");
+            bail!("Memory (MB) must be a number > 0");
         }
         if self.cpus == 0 {
-            bail!("Число vCPU должно быть > 0");
+            bail!("vCPU count must be > 0");
         }
         if self.display == DisplayMode::Vnc && !self.machine.supports_vnc() {
-            bail!("microvm не поддерживает VNC-дисплей. Выберите другую платформу.");
+            bail!("microvm does not support a VNC display. Pick another platform.");
         }
         if self.net_mode != NetMode::Nat && !self.hostfwd.is_empty() {
-            bail!("Проброс портов доступен только для сети nat (user)");
+            bail!("Port forwarding is available only for nat (user) networking");
         }
         let mut seen = std::collections::HashSet::new();
         for hf in &self.hostfwd {
             if hf.host_port == 0 || hf.guest_port == 0 {
-                bail!("Порты проброса должны быть больше 0");
+                bail!("Forwarding ports must be greater than 0");
             }
             if !seen.insert((hf.proto, hf.host_port)) {
-                bail!("Дублирующийся hostfwd: {} порт {}", hf.proto.qemu_str(), hf.host_port);
+                bail!("Duplicate hostfwd rule: {} port {}", hf.proto.qemu_str(), hf.host_port);
             }
         }
 
@@ -343,7 +348,7 @@ impl VmDraft {
             Some(p) => {
                 let path = PathBuf::from(p);
                 if !path.is_file() {
-                    bail!("ISO не найден: {}", path.display());
+                    bail!("ISO not found: {}", path.display());
                 }
                 Some(path)
             }
