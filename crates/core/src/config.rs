@@ -32,7 +32,10 @@ impl Config {
     pub fn load(base: &Path) -> LoadedConfig {
         let p = Config::path(base);
         if !p.exists() {
-            return LoadedConfig { config: Config::default(), warnings: vec![] };
+            return LoadedConfig {
+                config: Config::default(),
+                warnings: vec![],
+            };
         }
         match std::fs::read_to_string(&p) {
             Err(e) => LoadedConfig {
@@ -40,7 +43,10 @@ impl Config {
                 warnings: vec![format!("Failed to read config.toml: {e}")],
             },
             Ok(s) => match toml::from_str::<Config>(&s) {
-                Ok(c) => LoadedConfig { config: c, warnings: vec![] },
+                Ok(c) => LoadedConfig {
+                    config: c,
+                    warnings: vec![],
+                },
                 Err(e) => LoadedConfig {
                     config: Config::default(),
                     warnings: vec![format!(

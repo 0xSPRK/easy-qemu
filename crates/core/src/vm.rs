@@ -15,7 +15,13 @@ pub enum Accel {
 }
 
 impl Accel {
-    pub const ALL: &'static [Accel] = &[Accel::Auto, Accel::Kvm, Accel::Whpx, Accel::Tcg, Accel::None];
+    pub const ALL: &'static [Accel] = &[
+        Accel::Auto,
+        Accel::Kvm,
+        Accel::Whpx,
+        Accel::Tcg,
+        Accel::None,
+    ];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -39,8 +45,12 @@ pub enum DisplayMode {
 }
 
 impl DisplayMode {
-    pub const ALL: &'static [DisplayMode] =
-        &[DisplayMode::None, DisplayMode::Vnc, DisplayMode::Gtk, DisplayMode::Sdl];
+    pub const ALL: &'static [DisplayMode] = &[
+        DisplayMode::None,
+        DisplayMode::Vnc,
+        DisplayMode::Gtk,
+        DisplayMode::Sdl,
+    ];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -176,8 +186,12 @@ pub enum NetModel {
 }
 
 impl NetModel {
-    pub const ALL: &'static [NetModel] =
-        &[NetModel::Auto, NetModel::Virtio, NetModel::E1000, NetModel::Rtl8139];
+    pub const ALL: &'static [NetModel] = &[
+        NetModel::Auto,
+        NetModel::Virtio,
+        NetModel::E1000,
+        NetModel::Rtl8139,
+    ];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -300,8 +314,13 @@ pub struct VmDraft {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum DiskSpec {
-    New { size_gb: u32, folder: Option<String> },
-    Existing { path: String },
+    New {
+        size_gb: u32,
+        folder: Option<String>,
+    },
+    Existing {
+        path: String,
+    },
 }
 
 /// Validated draft used to build a VM.
@@ -340,7 +359,11 @@ impl VmDraft {
                 bail!("Forwarding ports must be greater than 0");
             }
             if !seen.insert((hf.proto, hf.host_port)) {
-                bail!("Duplicate hostfwd rule: {} port {}", hf.proto.qemu_str(), hf.host_port);
+                bail!(
+                    "Duplicate hostfwd rule: {} port {}",
+                    hf.proto.qemu_str(),
+                    hf.host_port
+                );
             }
         }
 

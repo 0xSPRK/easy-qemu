@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use crate::accel;
 use crate::config::Config;
 use crate::qmp::Qmp;
-use crate::store::{Store, RunningInfo};
+use crate::store::{RunningInfo, Store};
 use crate::vm::{Accel, CpuModel, DisplayMode, Firmware, Vm};
 
 pub fn resolve_binary(name: &str, override_path: &Option<PathBuf>) -> Result<PathBuf> {
@@ -15,10 +15,7 @@ pub fn resolve_binary(name: &str, override_path: &Option<PathBuf>) -> Result<Pat
         if p.exists() {
             return Ok(p.clone());
         }
-        return Err(anyhow!(
-            "Binary '{name}' not found at: {}",
-            p.display()
-        ));
+        return Err(anyhow!("Binary '{name}' not found at: {}", p.display()));
     }
 
     if let Some(p) = search_in_path(name) {
@@ -39,7 +36,11 @@ pub fn resolve_binary(name: &str, override_path: &Option<PathBuf>) -> Result<Pat
 }
 
 fn search_in_path(name: &str) -> Option<PathBuf> {
-    let exe_name = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    let exe_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join(&exe_name);
@@ -119,7 +120,11 @@ pub fn build_qemu_args(
         CpuModel::Max => a.extend(["-cpu".into(), "max".into()]),
         // `-cpu host` is only valid under KVM; use max for WHPX/TCG.
         CpuModel::Host => {
-            let model = if accel_resolved == Accel::Kvm { "host" } else { "max" };
+            let model = if accel_resolved == Accel::Kvm {
+                "host"
+            } else {
+                "max"
+            };
             a.extend(["-cpu".into(), model.into()]);
         }
     }
@@ -140,7 +145,12 @@ pub fn build_qemu_args(
             let start = vm.vnc_display.unwrap_or(0);
             a.extend([
                 "-vnc".into(),
-                format!("{vb}:{d},to={rng}", vb = vnc_bind, d = start, rng = VNC_PORT_SEARCH_RANGE),
+                format!(
+                    "{vb}:{d},to={rng}",
+                    vb = vnc_bind,
+                    d = start,
+                    rng = VNC_PORT_SEARCH_RANGE
+                ),
             ]);
         }
         DisplayMode::Gtk => a.extend(["-display".into(), "gtk".into()]),
@@ -209,8 +219,9 @@ fn find_ovmf() -> Option<(PathBuf, PathBuf)> {
 }
 
 fn setup_uefi(vm: &Vm, a: &mut Vec<String>) -> Result<()> {
-    let (code, vars_tmpl) = find_ovmf()
-        .ok_or_else(|| anyhow!("UEFI requested but OVMF was not found (OVMF_CODE.fd / OVMF_VARS.fd)."))?;
+    let (code, vars_tmpl) = find_ovmf().ok_or_else(|| {
+        anyhow!("UEFI requested but OVMF was not found (OVMF_CODE.fd / OVMF_VARS.fd).")
+    })?;
 
     let vars_path = vm
         .disk_path
@@ -239,14 +250,20 @@ fn open_log(path: &Path) -> std::fs::File {
     }
     #[cfg(windows)]
     {
-        std::fs::OpenOptions::new().write(true).open("NUL").unwrap_or_else(|_| {
-            std::fs::File::create(path.parent().unwrap_or(Path::new(".")).join("fallback.log"))
-                .unwrap()
-        })
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("NUL")
+            .unwrap_or_else(|_| {
+                std::fs::File::create(path.parent().unwrap_or(Path::new(".")).join("fallback.log"))
+                    .unwrap()
+            })
     }
     #[cfg(not(windows))]
     {
-        std::fs::OpenOptions::new().write(true).open("/dev/null").unwrap()
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .unwrap()
     }
 }
 
@@ -278,9 +295,12 @@ pub async fn start_vm(
     let log_path = store.base.join(format!("{}.log", vm.id));
 
     let mut cmd = std::process::Command::new(&bin);
-    cmd.args(&args)
-        .stdout(open_log(&log_path))
-        .stderr(std::fs::OpenOptions::new().append(true).open(&log_path).unwrap_or_else(|_| open_log(&log_path)));
+    cmd.args(&args).stdout(open_log(&log_path)).stderr(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .unwrap_or_else(|_| open_log(&log_path)),
+    );
 
     #[cfg(windows)]
     {
@@ -392,7 +412,8 @@ pub fn hide_window(_cmd: &mut tokio::process::Command) {}
 mod tests {
     use super::*;
     use crate::vm::{
-        Accel, CpuModel, DisplayMode, Firmware, HostFwd, MachineType, FwdProto, NetModel, NetMode, Vm,
+        Accel, CpuModel, DisplayMode, Firmware, FwdProto, HostFwd, MachineType, NetMode, NetModel,
+        Vm,
     };
 
     fn sample_vm(display: DisplayMode) -> Vm {
@@ -420,8 +441,7 @@ mod tests {
     #[test]
     fn args_contain_core_options() {
         let vm = sample_vm(DisplayMode::Vnc);
-        let args =
-            build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true).unwrap();
+        let args = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true).unwrap();
         let joined = args.join(" ");
         assert!(joined.contains("-name demo"));
         assert!(joined.contains("-m 2048"));
@@ -494,8 +514,16 @@ mod tests {
     fn nat_hostfwd_rules_in_args() {
         let mut vm = sample_vm(DisplayMode::None);
         vm.hostfwd = vec![
-            HostFwd { proto: FwdProto::Tcp, host_port: 2222, guest_port: 22 },
-            HostFwd { proto: FwdProto::Udp, host_port: 5353, guest_port: 53 },
+            HostFwd {
+                proto: FwdProto::Tcp,
+                host_port: 2222,
+                guest_port: 22,
+            },
+            HostFwd {
+                proto: FwdProto::Udp,
+                host_port: 5353,
+                guest_port: 53,
+            },
         ];
         let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
             .unwrap()
@@ -507,7 +535,11 @@ mod tests {
     fn nat_with_explicit_model_keeps_hostfwd() {
         let mut vm = sample_vm(DisplayMode::None);
         vm.net_model = NetModel::Virtio;
-        vm.hostfwd = vec![HostFwd { proto: FwdProto::Tcp, host_port: 8080, guest_port: 80 }];
+        vm.hostfwd = vec![HostFwd {
+            proto: FwdProto::Tcp,
+            host_port: 8080,
+            guest_port: 80,
+        }];
         let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
             .unwrap()
             .join(" ");
@@ -561,7 +593,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eq-log-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("x.log");
-        std::fs::write(&p, (1..=50).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n")).unwrap();
+        std::fs::write(
+            &p,
+            (1..=50)
+                .map(|i| format!("line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
         let tail = log_tail(&p, 10);
         assert_eq!(tail.lines().count(), 10);
         assert!(tail.ends_with("line50"));

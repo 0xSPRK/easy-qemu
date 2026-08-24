@@ -39,7 +39,10 @@ pub struct ProxyPool {
 
 impl ProxyPool {
     pub fn new() -> ProxyPool {
-        ProxyPool { owned_rt: None, servers: HashMap::new() }
+        ProxyPool {
+            owned_rt: None,
+            servers: HashMap::new(),
+        }
     }
 
     pub fn port_of(&self, id: &str) -> Option<u16> {
@@ -63,7 +66,6 @@ impl ProxyPool {
             Ok::<_, std::io::Error>((listener, port))
         };
 
-
         let (listener, port) = match tokio::runtime::Handle::try_current() {
             Ok(h) => {
                 let joined = h.spawn(bind()).await.map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -86,7 +88,9 @@ impl ProxyPool {
                     }
                 }
             };
-            let _ = axum::serve(listener, app).with_graceful_shutdown(shutdown).await;
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await;
         };
 
         let handle = match tokio::runtime::Handle::try_current() {
@@ -94,7 +98,14 @@ impl ProxyPool {
             Err(_) => self.ensure_owned().spawn(serve),
         };
 
-        self.servers.insert(id.to_string(), Srv { port, stop_tx, handle });
+        self.servers.insert(
+            id.to_string(),
+            Srv {
+                port,
+                stop_tx,
+                handle,
+            },
+        );
         Ok(port)
     }
 
@@ -214,7 +225,10 @@ mod tests {
         let vnc_port = vnc_listener.local_addr().unwrap().port();
 
         let mut pool = ProxyPool::new();
-        let port = pool.ensure("vm-proxy", "127.0.0.1".into(), vnc_port).await.unwrap();
+        let port = pool
+            .ensure("vm-proxy", "127.0.0.1".into(), vnc_port)
+            .await
+            .unwrap();
 
         let echo_thread = std::thread::spawn(move || {
             let (mut s, _) = vnc_listener.accept().unwrap();
@@ -230,7 +244,8 @@ mod tests {
 
         let mut sock = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        sock.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        sock.set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
 
         let key = "dGhlIHNhbXBsZSBub25jZQ==";
         let req = format!(
@@ -244,7 +259,10 @@ mod tests {
             sock.read_exact(&mut byte).unwrap();
             headers.push(byte[0] as char);
         }
-        assert!(headers.starts_with("HTTP/1.1 101"), "upgrade failed: {headers}");
+        assert!(
+            headers.starts_with("HTTP/1.1 101"),
+            "upgrade failed: {headers}"
+        );
 
         let payload = [1u8, 2, 3, 4, 5];
         let mask = [0x11u8, 0x22, 0x33, 0x44];

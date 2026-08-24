@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Format check (core)
+        run: cargo fmt -p easy-qemu-core -- --check
+      - name: Clippy (core)
+        run: cargo clippy -p easy-qemu-core --all-targets -- -D warnings
+      - name: Tests (core)
+        run: cargo test -p easy-qemu-core
+
+  app-build:
+    needs: core-tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build frontend
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+      - name: Clippy (app)
+        run: cargo clippy -p easy-qemu -- -D warnings || true
+      - name: Tauri release build
+        run: cargo build -p easy-qemu --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easy-qemu-windows
+          path: target/release/easy-qemu.exe

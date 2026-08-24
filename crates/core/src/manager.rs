@@ -62,7 +62,8 @@ pub struct ConsoleInfo {
     pub vnc_port: u16,
 }
 
-enum QmpAction {
+/// Guest control actions routed through QMP.
+pub enum QmpAction {
     Pause,
     Resume,
     Reset,
@@ -250,8 +251,9 @@ impl Manager {
                     Some(f) => PathBuf::from(f).join(&v.name),
                     None => cfg.storage_dir(&self.base).join(&v.name),
                 };
-                std::fs::create_dir_all(&folder)
-                    .map_err(|e| anyhow!("Failed to create disk folder {}: {e}", folder.display()))?;
+                std::fs::create_dir_all(&folder).map_err(|e| {
+                    anyhow!("Failed to create disk folder {}: {e}", folder.display())
+                })?;
                 let id_tmp = gen_id();
                 (folder.join(format!("{id_tmp}.qcow2")), *size_gb)
             }
@@ -352,7 +354,10 @@ impl Manager {
         {
             let mut run = self.running.lock().await;
             run.insert(id.to_string(), info.clone());
-            self.statuses.lock().await.insert(id.to_string(), Status::Running);
+            self.statuses
+                .lock()
+                .await
+                .insert(id.to_string(), Status::Running);
             let _ = self.store.save_running(&run);
         }
         Ok(info)
@@ -361,7 +366,9 @@ impl Manager {
     pub async fn qmp_action(&self, id: &str, action: QmpAction) -> Result<()> {
         let info = {
             let run = self.running.lock().await;
-            run.get(id).cloned().ok_or_else(|| anyhow!("VM is not running"))?
+            run.get(id)
+                .cloned()
+                .ok_or_else(|| anyhow!("VM is not running"))?
         };
         let mut q = Qmp::connect(qemu::qmp_addr(info.qmp_port)).await?;
         q.exec(action.cmd(), None).await?;
@@ -377,7 +384,10 @@ impl Manager {
         let _ = self.proxies.lock().await.stop(id);
         {
             let run = self.running.lock().await;
-            self.statuses.lock().await.insert(id.to_string(), Status::Shutoff);
+            self.statuses
+                .lock()
+                .await
+                .insert(id.to_string(), Status::Shutoff);
             let _ = self.store.save_running(&run);
         }
         let _ = std::fs::remove_file(self.storage.join(format!("{id}.pid")));
@@ -389,7 +399,9 @@ impl Manager {
     pub async fn open_console(&self, id: &str) -> Result<ConsoleInfo> {
         let info = {
             let run = self.running.lock().await;
-            run.get(id).cloned().ok_or_else(|| anyhow!("VM is not running"))?
+            run.get(id)
+                .cloned()
+                .ok_or_else(|| anyhow!("VM is not running"))?
         };
         if info.display != DisplayMode::Vnc {
             bail!("The console is available only for VMs with a VNC display");
@@ -457,7 +469,12 @@ impl Manager {
 
     pub fn uptime_secs(started_at: Option<u64>) -> u64 {
         started_at
-            .and_then(|t| SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|n| n.as_secs() - t))
+            .and_then(|t| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|n| n.as_secs() - t)
+            })
             .unwrap_or(0)
     }
 }
@@ -491,7 +508,10 @@ mod tests {
             net_mode: NetMode::Nat,
             net_model: NetModel::Auto,
             hostfwd: vec![],
-            disk: DiskSpec::New { size_gb: 1, folder: None },
+            disk: DiskSpec::New {
+                size_gb: 1,
+                folder: None,
+            },
         }
     }
 

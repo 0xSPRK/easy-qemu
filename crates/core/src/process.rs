@@ -41,7 +41,10 @@ pub fn is_alive(pid: i32, expect_prefix: &str) -> bool {
 pub fn kill_force(pid: i32, expect_prefix: &str) -> Result<()> {
     match process_image_name(pid) {
         Some(name) => {
-            if !name.to_lowercase().starts_with(&expect_prefix.to_lowercase()) {
+            if !name
+                .to_lowercase()
+                .starts_with(&expect_prefix.to_lowercase())
+            {
                 return Err(anyhow!(
                     "PID {pid} now belongs to '{name}', not '{expect_prefix}*. \
                      The process will not be stopped."
@@ -55,9 +58,13 @@ pub fn kill_force(pid: i32, expect_prefix: &str) -> Result<()> {
     }
 
     #[cfg(windows)]
-    let status = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).status()?;
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()?;
     #[cfg(not(windows))]
-    let status = Command::new("kill").args(["-9", &pid.to_string()]).status()?;
+    let status = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()?;
 
     if status.success() {
         Ok(())

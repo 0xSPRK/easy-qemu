@@ -55,8 +55,7 @@ async fn run_qemu_img(img_bin: &Path, args: &[&str]) -> Result<(String, String)>
 
 pub async fn list(img_bin: &Path, disk: &Path) -> Result<Vec<SnapInfo>> {
     let disk_s = disk.to_string_lossy().to_string();
-    let (stdout, _) =
-        run_qemu_img(img_bin, &["snapshot", "-l", "--output=json", &disk_s]).await?;
+    let (stdout, _) = run_qemu_img(img_bin, &["snapshot", "-l", "--output=json", &disk_s]).await?;
     let raw: RawList = serde_json::from_str(stdout.trim())
         .map_err(|e| anyhow!("Failed to parse the snapshot list: {e}"))?;
     Ok(raw
@@ -78,7 +77,11 @@ fn valid_snapshot_name(name: &str) -> Result<&str> {
     if name.is_empty() {
         return Err(anyhow!("Snapshot name cannot be empty"));
     }
-    if name.len() > 60 || !name.chars().all(|c| c.is_alphanumeric() || "-_ .".contains(c)) {
+    if name.len() > 60
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || "-_ .".contains(c))
+    {
         return Err(anyhow!(
             "Snapshot name: letters, digits, space and - _ . characters (up to 60 chars)"
         ));

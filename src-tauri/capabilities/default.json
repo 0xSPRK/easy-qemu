@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for the main and console windows",
+  "windows": ["main", "console_*"],
+  "permissions": [
+    "core:default",
+    "dialog:default"
+  ]
+}

@@ -51,7 +51,11 @@ impl Store {
         let vms_dir = base.join("vms");
         let running_file = base.join("running.json");
         std::fs::create_dir_all(&vms_dir).context("create store dir")?;
-        Ok(Store { base, vms_dir, running_file })
+        Ok(Store {
+            base,
+            vms_dir,
+            running_file,
+        })
     }
 
     pub fn list_vms(&self) -> Result<Vec<Vm>> {
@@ -109,9 +113,10 @@ impl Store {
                 if vm.disk_path.exists() {
                     match std::fs::remove_file(&vm.disk_path) {
                         Ok(_) => report.disk_deleted = true,
-                        Err(e) => report
-                            .errors
-                            .push(format!("Failed to delete disk {}: {e}", vm.disk_path.display())),
+                        Err(e) => report.errors.push(format!(
+                            "Failed to delete disk {}: {e}",
+                            vm.disk_path.display()
+                        )),
                     }
                 } else {
                     report.disk_deleted = true; // already absent — goal achieved
@@ -128,7 +133,9 @@ impl Store {
         if p.exists() {
             match std::fs::remove_file(&p) {
                 Ok(_) => report.json_removed = true,
-                Err(e) => report.errors.push(format!("Failed to remove the VM record: {e}")),
+                Err(e) => report
+                    .errors
+                    .push(format!("Failed to remove the VM record: {e}")),
             }
         } else {
             report.json_removed = true;

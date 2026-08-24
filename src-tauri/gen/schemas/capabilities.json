@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capabilities for the main and console windows","local":true,"windows":["main","console_*"],"permissions":["core:default","dialog:default"]}}
