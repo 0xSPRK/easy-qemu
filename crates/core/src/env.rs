@@ -1,13 +1,14 @@
 //! Host environment probe: resolved QEMU binaries and supported accelerators.
 //! Used by the Settings screen ("Detected environment") and the status bar.
 
-use std::path::PathBuf;
-
 use serde::Serialize;
 
 use crate::accel;
 use crate::config::Config;
 use crate::qemu;
+
+#[cfg(test)]
+use std::path::PathBuf;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct EnvProbe {
