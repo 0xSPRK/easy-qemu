@@ -7,8 +7,10 @@ use axum::extract::State;
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -164,53 +166,46 @@ async fn proxy(ws: WebSocket, vnc_host: String, vnc_port: u16) {
         Ok(t) => t,
         Err(_) => return,
     };
-    let (mut ws_sender, mut ws_receiver) = ws.split();
-    let (mut tcp_read, mut tcp_write) = tcp.into_split();
-
-    let to_tcp = async move {
-        loop {
-            let msg = match ws_receiver.next().await {
-                Some(Ok(m)) => m,
-                _ => break,
-            };
-            match msg {
-                Message::Text(t) => {
-                    if tcp_write.write_all(t.as_bytes()).await.is_err() {
-                        break;
-                    }
-                }
-                Message::Binary(b) => {
-                    if tcp_write.write_all(&b[..]).await.is_err() {
-                        break;
-                    }
-                }
-                Message::Close(_) => break,
-                _ => {}
-            }
-        }
-        let _ = tcp_write.shutdown().await;
-    };
-
-    let to_ws = async move {
-        let mut buf = [0u8; 16384];
-        loop {
-            let n = match tcp_read.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(_) => break,
-            };
-            let payload = Bytes::copy_from_slice(&buf[..n]);
-            if ws_sender.send(Message::Binary(payload)).await.is_err() {
-                break;
-            }
-        }
-        let _ = ws_sender.close().await;
-    };
+    let (ws_sender, ws_receiver) = ws.split();
+    let (tcp_read, tcp_write) = tcp.into_split();
 
     tokio::select! {
-        _ = to_tcp => {}
-        _ = to_ws => {}
+        _ = pump_ws_to_tcp(ws_receiver, tcp_write) => {}
+        _ = pump_tcp_to_ws(tcp_read, ws_sender) => {}
     }
+}
+
+/// WebSocket → TCP: client input (keyboard/mouse) goes to the VNC server.
+async fn pump_ws_to_tcp(mut rx: SplitStream<WebSocket>, mut w: OwnedWriteHalf) {
+    while let Some(Ok(msg)) = rx.next().await {
+        let payload: Vec<u8> = match msg {
+            Message::Text(t) => t.as_bytes().to_vec(),
+            Message::Binary(b) => b.to_vec(),
+            Message::Close(_) => break,
+            _ => continue,
+        };
+        if w.write_all(&payload).await.is_err() {
+            break;
+        }
+    }
+    let _ = w.shutdown().await;
+}
+
+/// TCP → WebSocket: framebuffer updates go back to the browser.
+async fn pump_tcp_to_ws(mut r: OwnedReadHalf, mut tx: SplitSink<WebSocket, Message>) {
+    let mut buf = [0u8; 16384];
+    loop {
+        match r.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let payload = Bytes::copy_from_slice(&buf[..n]);
+                if tx.send(Message::Binary(payload)).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    let _ = tx.close().await;
 }
 
 #[cfg(test)]

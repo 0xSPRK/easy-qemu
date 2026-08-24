@@ -331,18 +331,7 @@ pub async fn start_vm(
     let pid = wait_for_pidfile(&mut child, &vm.pidfile_path(), &log_path).await?;
 
     // Wait for QMP readiness and resolve the actual VNC port.
-    let mut vnc_port = None;
-    for _ in 0..10 {
-        match Qmp::connect(qmp_addr(qmp_port)).await {
-            Ok(mut q) => {
-                if vm.display == DisplayMode::Vnc {
-                    vnc_port = q.query_vnc_port().await.ok().flatten();
-                }
-                break;
-            }
-            Err(_) => tokio::time::sleep(Duration::from_millis(500)).await,
-        }
-    }
+    let vnc_port = wait_qmp_vnc(qmp_port, vm.display == DisplayMode::Vnc).await;
 
     Ok(RunningInfo {
         id: vm.id.clone(),
@@ -358,6 +347,22 @@ pub async fn start_vm(
                 .unwrap_or(0),
         ),
     })
+}
+
+/// Retry-connect to QMP for up to 5 s; when `want_vnc` is set, ask it for the
+/// actual VNC port (QEMU searched a port range, so the hint may be off).
+async fn wait_qmp_vnc(qmp_port: u16, want_vnc: bool) -> Option<u16> {
+    for _ in 0..10 {
+        if let Ok(mut q) = Qmp::connect(qmp_addr(qmp_port)).await {
+            return if want_vnc {
+                q.query_vnc_port().await.ok().flatten()
+            } else {
+                None
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
 }
 
 async fn wait_for_pidfile(

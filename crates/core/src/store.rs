@@ -115,40 +115,48 @@ impl Store {
         let vm = self.get_vm(id)?;
 
         if let Some(ref vm) = vm {
-            report.disk_attempted = delete_disk && vm.disk_owned;
-            if report.disk_attempted {
-                if vm.disk_path.exists() {
-                    match std::fs::remove_file(&vm.disk_path) {
-                        Ok(_) => report.disk_deleted = true,
-                        Err(e) => report.errors.push(format!(
-                            "Failed to delete disk {}: {e}",
-                            vm.disk_path.display()
-                        )),
-                    }
-                } else {
-                    report.disk_deleted = true; // already absent — goal achieved
-                }
-            }
-        }
-
-        if let Some(ref vm) = vm {
+            Self::try_delete_disk(vm, delete_disk, &mut report);
             let _ = std::fs::remove_file(vm.pidfile_path());
             report.pidfile_removed = true;
         }
 
-        let p = self.vms_dir.join(format!("{id}.json"));
-        if p.exists() {
-            match std::fs::remove_file(&p) {
-                Ok(_) => report.json_removed = true,
-                Err(e) => report
-                    .errors
-                    .push(format!("Failed to remove the VM record: {e}")),
-            }
-        } else {
-            report.json_removed = true;
-        }
-
+        report.json_removed = self.remove_vm_record(id, &mut report);
         Ok(report)
+    }
+
+    /// Removes the qcow2 file when the VM owns its disk and deletion was requested.
+    fn try_delete_disk(vm: &Vm, requested: bool, report: &mut DeleteReport) {
+        report.disk_attempted = requested && vm.disk_owned;
+        if !report.disk_attempted {
+            return;
+        }
+        if !vm.disk_path.exists() {
+            report.disk_deleted = true; // already absent — goal achieved
+            return;
+        }
+        match std::fs::remove_file(&vm.disk_path) {
+            Ok(_) => report.disk_deleted = true,
+            Err(e) => report.errors.push(format!(
+                "Failed to delete disk {}: {e}",
+                vm.disk_path.display()
+            )),
+        }
+    }
+
+    fn remove_vm_record(&self, id: &str, report: &mut DeleteReport) -> bool {
+        let p = self.vms_dir.join(format!("{id}.json"));
+        if !p.exists() {
+            return true;
+        }
+        match std::fs::remove_file(&p) {
+            Ok(_) => true,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("Failed to remove the VM record: {e}"));
+                false
+            }
+        }
     }
 
     pub fn load_running(&self) -> Result<HashMap<String, RunningInfo>> {
