@@ -60,6 +60,8 @@
         {#each $visibleVms as vm (vm.id)}
           {@const st = statusOf(vm)}
           {@const sel = vm.id === $selectedId}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <tr
             class={rowClass(vm, sel)}
             onclick={() => selectedId.set(vm.id)}

@@ -10,10 +10,10 @@
   import Toasts from "../components/Toasts.svelte";
   import type { VmListItem, VmStatus } from "../lib/types";
 
-  let showForm = false;
-  let editTarget: VmListItem | null = null;
-  let showSettings = false;
-  let confirmDelete: VmListItem | null = null;
+  let showForm = $state(false);
+  let editTarget = $state<VmListItem | null>(null);
+  let showSettings = $state(false);
+  let confirmDelete = $state<VmListItem | null>(null);
   let deleteDisk = $state(true);
   let busy = $state(false);
 

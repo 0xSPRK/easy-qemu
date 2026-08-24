@@ -4,9 +4,9 @@
 
 <div class="toasts">
   {#each $toasts as t (t.id)}
-    <div class="toast {t.kind}" role="status" onclick={() => dismiss(t.id)}>
+    <button type="button" class="toast {t.kind}" role="status" onclick={() => dismiss(t.id)}>
       {t.text}
-    </div>
+    </button>
   {/each}
 </div>
 
