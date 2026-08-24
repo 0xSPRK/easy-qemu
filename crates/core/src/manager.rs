@@ -178,24 +178,12 @@ impl Manager {
 
         let mut changed = false;
         for (id, port) in probes {
-            let st = match Qmp::connect(qemu::qmp_addr(port)).await {
-                Ok(mut q) => match q.query_status().await {
-                    Ok(s) => Status::from_qmp(&s),
-                    Err(_) => Status::Shutoff,
-                },
-                Err(_) => Status::Shutoff,
-            };
-            {
-                let mut run = self.running.lock().await;
-                let mut stat = self.statuses.lock().await;
-                stat.insert(id.clone(), st);
-                if st == Status::Shutoff && run.remove(&id).is_some() {
-                    changed = true;
-                    let _ = std::fs::remove_file(self.storage.join(format!("{id}.pid")));
-                }
-            }
-            if st == Status::Shutoff {
-                let _ = self.proxies.lock().await.stop(&id);
+            let status = probe_status(port).await;
+            if status == Status::Shutoff {
+                self.mark_dead(&id).await;
+                changed = true;
+            } else {
+                self.statuses.lock().await.insert(id, status);
             }
         }
         if changed {
@@ -204,6 +192,21 @@ impl Manager {
         }
 
         Ok(self.snapshot_updates().await)
+    }
+
+    /// Forget a dead VM: drop its running record, pidfile and console proxy.
+    async fn mark_dead(&self, id: &str) {
+        {
+            let mut run = self.running.lock().await;
+            if run.remove(id).is_some() {
+                let _ = std::fs::remove_file(self.storage.join(format!("{id}.pid")));
+            }
+        }
+        self.statuses
+            .lock()
+            .await
+            .insert(id.to_string(), Status::Shutoff);
+        let _ = self.proxies.lock().await.stop(id);
     }
 
     /// Current state without touching QMP.
@@ -481,6 +484,18 @@ impl Manager {
 
 fn gen_id() -> String {
     format!("vm{}", uuid::Uuid::new_v4().simple())
+}
+
+/// Query guest status over a short-lived QMP connection.
+async fn probe_status(qmp_port: u16) -> Status {
+    match Qmp::connect(qemu::qmp_addr(qmp_port)).await {
+        Ok(mut q) => q
+            .query_status()
+            .await
+            .map(|s| Status::from_qmp(&s))
+            .unwrap_or(Status::Shutoff),
+        Err(_) => Status::Shutoff,
+    }
 }
 
 #[cfg(test)]

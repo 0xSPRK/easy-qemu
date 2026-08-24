@@ -337,6 +337,21 @@ pub struct ValidatedDraft {
 impl VmDraft {
     /// Form field validation. Errors are human-readable and shown in the UI.
     pub fn validate(&self) -> Result<ValidatedDraft> {
+        let (name, memory_mb, cpus) = self.validate_identity()?;
+        self.validate_display()?;
+        let hostfwd = self.validate_hostfwd()?;
+        let iso = self.validate_iso()?;
+        Ok(ValidatedDraft {
+            name,
+            memory_mb,
+            cpus,
+            iso,
+            hostfwd,
+            disk: self.disk.clone(),
+        })
+    }
+
+    fn validate_identity(&self) -> Result<(String, u32, u32)> {
         let name = self.name.trim().to_string();
         if name.is_empty() {
             bail!("Name cannot be empty");
@@ -347,9 +362,17 @@ impl VmDraft {
         if self.cpus == 0 {
             bail!("vCPU count must be > 0");
         }
+        Ok((name, self.memory_mb, self.cpus))
+    }
+
+    fn validate_display(&self) -> Result<()> {
         if self.display == DisplayMode::Vnc && !self.machine.supports_vnc() {
             bail!("microvm does not support a VNC display. Pick another platform.");
         }
+        Ok(())
+    }
+
+    fn validate_hostfwd(&self) -> Result<Vec<HostFwd>> {
         if self.net_mode != NetMode::Nat && !self.hostfwd.is_empty() {
             bail!("Port forwarding is available only for nat (user) networking");
         }
@@ -366,25 +389,19 @@ impl VmDraft {
                 );
             }
         }
+        Ok(self.hostfwd.clone())
+    }
 
-        let iso = match self.iso.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    fn validate_iso(&self) -> Result<Option<PathBuf>> {
+        match self.iso.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(p) => {
                 let path = PathBuf::from(p);
                 if !path.is_file() {
                     bail!("ISO not found: {}", path.display());
                 }
-                Some(path)
+                Ok(Some(path))
             }
-            None => None,
-        };
-
-        Ok(ValidatedDraft {
-            name,
-            memory_mb: self.memory_mb,
-            cpus: self.cpus,
-            iso,
-            hostfwd: self.hostfwd.clone(),
-            disk: self.disk.clone(),
-        })
+            None => Ok(None),
+        }
     }
 }

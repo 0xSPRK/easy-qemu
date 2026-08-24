@@ -3,6 +3,7 @@
   import { initEvents, reloadVms, statuses, visibleVms, selectedId, selectedVm, filter, vms } from "../lib/state";
   import { api } from "../lib/api";
   import { toast } from "../lib/toast";
+  import { matchGlobalHotkey } from "../lib/hotkeys";
   import VmTable from "../components/VmTable.svelte";
   import DetailsPanel from "../components/DetailsPanel.svelte";
   import VmForm from "../components/VmForm.svelte";
@@ -107,29 +108,24 @@
     filterEl?.focus();
   }
 
-  // Global hotkeys. Ignored while typing in inputs or when a modal is open.
+  // Global hotkeys (matching table lives in lib/hotkeys.ts).
   function onkeydown(e: KeyboardEvent) {
-    const t = e.target as HTMLElement | null;
-    const typing =
-      t instanceof HTMLInputElement ||
-      t instanceof HTMLTextAreaElement ||
-      t instanceof HTMLSelectElement;
-    if (showForm || showSettings || confirmDelete) return;
-
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-      e.preventDefault();
-      filterEl?.focus();
-      filterEl?.select();
-      return;
-    }
-    if (typing) return;
-
-    if (e.key.toLowerCase() === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      openCreate();
-    } else if (e.key === "Delete") {
-      const sel = $selectedVm;
-      if (sel) askDelete(sel);
+    const modalOpen = !!(showForm || showSettings || confirmDelete);
+    switch (matchGlobalHotkey(e, { modalOpen })) {
+      case "new-vm":
+        openCreate();
+        break;
+      case "focus-filter":
+        filterEl?.focus();
+        filterEl?.select();
+        break;
+      case "delete-selected": {
+        const sel = $selectedVm;
+        if (sel) askDelete(sel);
+        break;
+      }
+      default:
+        break;
     }
   }
 </script>

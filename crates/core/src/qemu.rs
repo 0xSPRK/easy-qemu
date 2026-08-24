@@ -88,74 +88,12 @@ pub fn build_qemu_args(
         format!("file={},if=virtio,format=qcow2", vm.disk_path.display()),
     ];
 
-    let net = match vm.net_mode {
-        crate::vm::NetMode::Nat => {
-            let mut nic = "user".to_string();
-            if let Some(m) = vm.net_model.qemu_model() {
-                nic.push_str(&format!(",model={m}"));
-            }
-            for hf in &vm.hostfwd {
-                nic.push(',');
-                nic.push_str(&hf.qemu_fragment());
-            }
-            nic
-        }
-        crate::vm::NetMode::Bridged => {
-            let mut nic = "tap".to_string();
-            if let Some(m) = vm.net_model.qemu_model() {
-                nic.push_str(&format!(",model={m}"));
-            }
-            nic
-        }
-        crate::vm::NetMode::None => "none".to_string(),
-    };
-    a.extend(["-nic".into(), net]);
-
+    a.extend(["-nic".into(), net_arg(vm)]);
     if let Some(flag) = vm.machine.qemu_flag() {
         a.extend(["-machine".into(), flag.to_string()]);
     }
-
-    match vm.cpu {
-        CpuModel::Auto => {}
-        CpuModel::Max => a.extend(["-cpu".into(), "max".into()]),
-        // `-cpu host` is only valid under KVM; use max for WHPX/TCG.
-        CpuModel::Host => {
-            let model = if accel_resolved == Accel::Kvm {
-                "host"
-            } else {
-                "max"
-            };
-            a.extend(["-cpu".into(), model.into()]);
-        }
-    }
-
-    match accel_resolved {
-        Accel::Kvm => a.push("-enable-kvm".into()),
-        Accel::Whpx => a.extend(["-accel".into(), "whpx".into()]),
-        Accel::Tcg => a.extend(["-accel".into(), "tcg".into()]),
-        Accel::Auto | Accel::None => {}
-    }
-
-    match vm.display {
-        DisplayMode::None => a.extend(["-display".into(), "none".into()]),
-        DisplayMode::Vnc => {
-            // Dynamic free-port selection: start from the hint display number,
-            // QEMU picks the first free port in the range; the actual port is
-            // resolved via QMP query-vnc.
-            let start = vm.vnc_display.unwrap_or(0);
-            a.extend([
-                "-vnc".into(),
-                format!(
-                    "{vb}:{d},to={rng}",
-                    vb = vnc_bind,
-                    d = start,
-                    rng = VNC_PORT_SEARCH_RANGE
-                ),
-            ]);
-        }
-        DisplayMode::Gtk => a.extend(["-display".into(), "gtk".into()]),
-        DisplayMode::Sdl => a.extend(["-display".into(), "sdl".into()]),
-    }
+    a.extend(cpu_accel_args(vm, accel_resolved));
+    a.extend(display_args(vm, vnc_bind));
 
     if vm.firmware == Firmware::Uefi {
         setup_uefi(vm, &mut a)?;
@@ -170,7 +108,92 @@ pub fn build_qemu_args(
         ]);
     }
 
-    a.extend([
+    a.extend(qmp_args(qmp_port, &vm.pidfile_path()));
+
+    if daemonize {
+        #[cfg(target_os = "linux")]
+        a.push("-daemonize".into());
+    }
+
+    Ok(a)
+}
+
+/// `-nic` value: user/tap/none with optional model and hostfwd rules.
+fn net_arg(vm: &Vm) -> String {
+    use crate::vm::NetMode;
+    match vm.net_mode {
+        NetMode::Nat => {
+            let mut nic = "user".to_string();
+            if let Some(m) = vm.net_model.qemu_model() {
+                nic.push_str(&format!(",model={m}"));
+            }
+            for hf in &vm.hostfwd {
+                nic.push(',');
+                nic.push_str(&hf.qemu_fragment());
+            }
+            nic
+        }
+        NetMode::Bridged => {
+            let mut nic = "tap".to_string();
+            if let Some(m) = vm.net_model.qemu_model() {
+                nic.push_str(&format!(",model={m}"));
+            }
+            nic
+        }
+        NetMode::None => "none".to_string(),
+    }
+}
+
+/// `-cpu` / accelerator flags. `-cpu host` is only valid under KVM;
+/// max is used for WHPX/TCG.
+fn cpu_accel_args(vm: &Vm, accel_resolved: Accel) -> Vec<String> {
+    let mut a = vec![];
+    match vm.cpu {
+        CpuModel::Auto => {}
+        CpuModel::Max => a.extend(["-cpu".into(), "max".into()]),
+        CpuModel::Host => {
+            let model = if accel_resolved == Accel::Kvm {
+                "host"
+            } else {
+                "max"
+            };
+            a.extend(["-cpu".into(), model.into()]);
+        }
+    }
+    match accel_resolved {
+        Accel::Kvm => a.push("-enable-kvm".into()),
+        Accel::Whpx => a.extend(["-accel".into(), "whpx".into()]),
+        Accel::Tcg => a.extend(["-accel".into(), "tcg".into()]),
+        Accel::Auto | Accel::None => {}
+    }
+    a
+}
+
+/// Display flags. VNC uses a dynamic port search (`to=`); the actual port
+/// is resolved via QMP query-vnc after start.
+fn display_args(vm: &Vm, vnc_bind: &str) -> Vec<String> {
+    match vm.display {
+        DisplayMode::None => vec!["-display".into(), "none".into()],
+        DisplayMode::Vnc => {
+            let start = vm.vnc_display.unwrap_or(0);
+            vec![
+                "-vnc".into(),
+                format!(
+                    "{vb}:{d},to={rng}",
+                    vb = vnc_bind,
+                    d = start,
+                    rng = VNC_PORT_SEARCH_RANGE
+                ),
+            ]
+        }
+        DisplayMode::Gtk => vec!["-display".into(), "gtk".into()],
+        DisplayMode::Sdl => vec!["-display".into(), "sdl".into()],
+    }
+}
+
+/// QMP chardev/monitor + pidfile flags.
+fn qmp_args(qmp_port: u16, pidfile: &Path) -> Vec<String> {
+    vec![
         "-chardev".into(),
         format!(
             "socket,host=127.0.0.1,port={},server=on,wait=off,id=qmp0",
@@ -179,15 +202,8 @@ pub fn build_qemu_args(
         "-mon".into(),
         "chardev=qmp0,mode=control".into(),
         "-pidfile".into(),
-        vm.pidfile_path().to_string_lossy().to_string(),
-    ]);
-
-    if daemonize {
-        #[cfg(target_os = "linux")]
-        a.push("-daemonize".into());
-    }
-
-    Ok(a)
+        pidfile.to_string_lossy().to_string(),
+    ]
 }
 
 /// Locate OVMF (UEFI) images: CODE (read-only) and VARS (template copied per VM).

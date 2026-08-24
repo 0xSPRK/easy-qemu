@@ -59,22 +59,29 @@ impl Store {
     }
 
     pub fn list_vms(&self) -> Result<Vec<Vm>> {
-        let mut out = vec![];
-        if let Ok(entries) = std::fs::read_dir(&self.vms_dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.extension().map(|x| x == "json").unwrap_or(false) {
-                    if let Ok(s) = std::fs::read_to_string(&p) {
-                        match serde_json::from_str::<Vm>(&s) {
-                            Ok(vm) => out.push(vm),
-                            Err(e) => eprintln!("skip broken vm file {}: {e}", p.display()),
-                        }
-                    }
-                }
-            }
-        }
+        let entries = match std::fs::read_dir(&self.vms_dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(vec![]),
+        };
+        let mut out: Vec<Vm> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| Self::read_vm_file(&e.path()))
+            .collect();
         out.sort_by_key(|vm| vm.name.to_lowercase());
         Ok(out)
+    }
+
+    /// Reads one VM record; broken files are skipped with a note on stderr.
+    fn read_vm_file(path: &std::path::Path) -> Option<Vm> {
+        let s = std::fs::read_to_string(path).ok()?;
+        match serde_json::from_str::<Vm>(&s) {
+            Ok(vm) => Some(vm),
+            Err(e) => {
+                eprintln!("skip broken vm file {}: {e}", path.display());
+                None
+            }
+        }
     }
 
     pub fn get_vm(&self, id: &str) -> Result<Option<Vm>> {

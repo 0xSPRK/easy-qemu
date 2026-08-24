@@ -147,24 +147,43 @@ pub fn read_log(m: State<'_, Manager>, id: String, lines: Option<u32>) -> String
 
 // ---------- snapshots ----------
 
-#[tauri::command]
-pub async fn snapshot_list(m: State<'_, Manager>, id: String) -> CmdResult<Vec<SnapInfo>> {
-    m.snapshot_list(&id).await.map_err(err)
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapOp {
+    List,
+    Create,
+    Apply,
+    Delete,
 }
 
+/// Single entry point for snapshot operations.
+/// `list` returns the snapshots; mutations return an empty vec.
 #[tauri::command]
-pub async fn snapshot_create(m: State<'_, Manager>, id: String, name: String) -> CmdResult<()> {
-    m.snapshot_create(&id, &name).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn snapshot_apply(m: State<'_, Manager>, id: String, name: String) -> CmdResult<()> {
-    m.snapshot_apply(&id, &name).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn snapshot_delete(m: State<'_, Manager>, id: String, name: String) -> CmdResult<()> {
-    m.snapshot_delete(&id, &name).await.map_err(err)
+pub async fn snapshot_op(
+    m: State<'_, Manager>,
+    id: String,
+    op: SnapOp,
+    name: Option<String>,
+) -> CmdResult<Vec<SnapInfo>> {
+    let empty = <Vec<SnapInfo>>::new();
+    match op {
+        SnapOp::List => m.snapshot_list(&id).await.map_err(err),
+        SnapOp::Create => m
+            .snapshot_create(&id, name.as_deref().unwrap_or_default())
+            .await
+            .map(|_| empty)
+            .map_err(err),
+        SnapOp::Apply => m
+            .snapshot_apply(&id, name.as_deref().unwrap_or_default())
+            .await
+            .map(|_| empty)
+            .map_err(err),
+        SnapOp::Delete => m
+            .snapshot_delete(&id, name.as_deref().unwrap_or_default())
+            .await
+            .map(|_| empty)
+            .map_err(err),
+    }
 }
 
 // ---------- settings ----------

@@ -32,13 +32,12 @@ export const api = {
   readLog: (id: string, lines?: number) =>
     invoke<string>("read_log", { id, lines: lines ?? null }),
 
-  snapshotList: (id: string) => invoke<SnapInfo[]>("snapshot_list", { id }),
-  snapshotCreate: (id: string, name: string) =>
-    invoke<void>("snapshot_create", { id, name }),
-  snapshotApply: (id: string, name: string) =>
-    invoke<void>("snapshot_apply", { id, name }),
-  snapshotDelete: (id: string, name: string) =>
-    invoke<void>("snapshot_delete", { id, name }),
+  snapshotOp: (id: string, op: "list" | "create" | "apply" | "delete", name?: string) =>
+    invoke<SnapInfo[]>("snapshot_op", { id, op, name: name ?? null }),
+  snapshotList: (id: string) => api.snapshotOp(id, "list"),
+  snapshotCreate: (id: string, name: string) => api.snapshotOp(id, "create", name),
+  snapshotApply: (id: string, name: string) => api.snapshotOp(id, "apply", name),
+  snapshotDelete: (id: string, name: string) => api.snapshotOp(id, "delete", name),
 
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (cfg: AppConfig) => invoke<void>("set_config", { cfg }),
