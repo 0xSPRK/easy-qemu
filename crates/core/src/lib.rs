@@ -10,6 +10,7 @@ pub mod snapshots;
 pub mod ssh;
 pub mod stats;
 pub mod store;
+pub mod validate;
 pub mod vm;
 
 pub use manager::{ConsoleInfo, Manager, QmpAction, Status, VmListItem, VmUpdate};
