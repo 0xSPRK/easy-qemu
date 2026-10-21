@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::validate;
 use crate::vm::{DisplayMode, Vm};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -66,18 +67,21 @@ impl Store {
 
     // ---------- manager-owned per-VM files ----------
 
-    pub fn pidfile(&self, id: &str) -> PathBuf {
-        self.base.join(format!("{id}.pid"))
+    // The id becomes part of a file name, so it is validated before it is
+    // used: an id like "..\..\victim" must never reach the filesystem
+    // (audit F-02).
+    pub fn pidfile(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.base.join(format!("{}.pid", validate::vm_id(id)?)))
     }
-    pub fn vars_fd(&self, id: &str) -> PathBuf {
-        self.base.join(format!("{id}-vars.fd"))
+    pub fn vars_fd(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.base.join(format!("{}-vars.fd", validate::vm_id(id)?)))
     }
-    pub fn log(&self, id: &str) -> PathBuf {
-        self.base.join(format!("{id}.log"))
+    pub fn log(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.base.join(format!("{}.log", validate::vm_id(id)?)))
     }
     /// Saved VM state produced by live migration (`migrate file:`).
-    pub fn saved_state(&self, id: &str) -> PathBuf {
-        self.base.join(format!("{id}.sav"))
+    pub fn saved_state(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.base.join(format!("{}.sav", validate::vm_id(id)?)))
     }
 
     // ---------- vm records ----------
@@ -116,6 +120,7 @@ impl Store {
     }
 
     pub fn get_vm(&self, id: &str) -> Result<Option<Vm>> {
+        let id = validate::vm_id(id)?;
         let p = self.vms_dir.join(format!("{id}.json"));
         if !p.exists() {
             return Ok(None);
@@ -126,8 +131,9 @@ impl Store {
 
     /// Atomic write: tmp + rename.
     pub fn save_vm(&self, vm: &Vm) -> Result<()> {
-        let p = self.vms_dir.join(format!("{}.json", vm.id));
-        let tmp = self.vms_dir.join(format!(".{}.json.tmp", vm.id));
+        let id = validate::vm_id(&vm.id)?;
+        let p = self.vms_dir.join(format!("{id}.json"));
+        let tmp = self.vms_dir.join(format!(".{id}.json.tmp"));
         std::fs::write(&tmp, serde_json::to_string_pretty(vm)?)?;
         std::fs::rename(&tmp, &p)?;
         Ok(())
@@ -164,10 +170,10 @@ impl Store {
                     }
                 }
             }
-            report.pidfile_removed = self.remove_aux(&self.pidfile(id), &mut report.errors);
-            report.vars_removed = self.remove_aux(&self.vars_fd(id), &mut report.errors);
-            report.log_removed = self.remove_aux(&self.log(id), &mut report.errors);
-            report.sav_removed = self.remove_aux(&self.saved_state(id), &mut report.errors);
+            report.pidfile_removed = self.remove_aux(&self.pidfile(id)?, &mut report.errors);
+            report.vars_removed = self.remove_aux(&self.vars_fd(id)?, &mut report.errors);
+            report.log_removed = self.remove_aux(&self.log(id)?, &mut report.errors);
+            report.sav_removed = self.remove_aux(&self.saved_state(id)?, &mut report.errors);
 
             // Legacy UEFI vars next to the first disk (pre-multi-disk layout).
             if let Some(old_vars) = vm
@@ -181,8 +187,8 @@ impl Store {
             }
         } else {
             // No record — still clean up whatever aux files exist.
-            report.pidfile_removed = self.remove_aux(&self.pidfile(id), &mut report.errors);
-            report.sav_removed = self.remove_aux(&self.saved_state(id), &mut report.errors);
+            report.pidfile_removed = self.remove_aux(&self.pidfile(id)?, &mut report.errors);
+            report.sav_removed = self.remove_aux(&self.saved_state(id)?, &mut report.errors);
         }
 
         report.json_removed = self.remove_vm_record(id, &mut report);
@@ -203,6 +209,10 @@ impl Store {
     }
 
     fn remove_vm_record(&self, id: &str, report: &mut DeleteReport) -> bool {
+        let Ok(id) = validate::vm_id(id) else {
+            report.errors.push("Invalid VM id".to_string());
+            return false;
+        };
         let p = self.vms_dir.join(format!("{id}.json"));
         if !p.exists() {
             return true;
@@ -350,6 +360,40 @@ mod tests {
         assert!(vm.disks[1].path.exists());
         let _ = std::fs::remove_file(&vm.disks[0].path);
         let _ = std::fs::remove_file(&vm.disks[1].path);
+    }
+
+    /// A VM id becomes a file name, so an id that tries to escape the
+    /// storage directory must be rejected instead of deleted (audit F-02).
+    #[test]
+    fn ids_that_escape_the_storage_dir_are_rejected() {
+        let base = tmp_base();
+        let store = Store::new(base.clone()).unwrap();
+        let victim = base.join("eq-store-victim.json");
+        std::fs::write(&victim, b"{}").unwrap();
+
+        for id in ["..", "../eq-store-victim", "..\\eq-store-victim", "a/b"] {
+            assert!(store.get_vm(id).is_err(), "get_vm must reject {id:?}");
+            assert!(
+                store.delete_vm(id, true).is_err(),
+                "delete_vm must reject {id:?}"
+            );
+            assert!(store.pidfile(id).is_err(), "pidfile must reject {id:?}");
+        }
+
+        assert!(victim.exists(), "the file outside the store must survive");
+        let _ = std::fs::remove_file(&victim);
+    }
+
+    /// The record of a VM is written to `<id>.json` inside the store, so a
+    /// record with a hostile id must not be written outside of it.
+    #[test]
+    fn save_vm_refuses_a_hostile_id() {
+        let base = tmp_base();
+        let store = Store::new(base.clone()).unwrap();
+        let mut vm = vm_with_disks(&base);
+        vm.id = "../escaped".into();
+        assert!(store.save_vm(&vm).is_err());
+        assert!(!base.join("escaped.json").exists());
     }
 
     #[test]

@@ -15,6 +15,13 @@ fn err(e: anyhow::Error) -> String {
     format!("{e:#}")
 }
 
+/// The window label of a console is built from the VM id, so the id is
+/// checked before it becomes a label (audit F-27).
+fn console_label(id: &str) -> CmdResult<String> {
+    let id = easy_qemu_core::validate::vm_id(id).map_err(err)?;
+    Ok(format!("console_{id}"))
+}
+
 #[tauri::command]
 pub async fn list_vms(m: State<'_, Manager>) -> CmdResult<Vec<VmListItem>> {
     m.list().await.map_err(err)
@@ -175,7 +182,7 @@ pub async fn open_console(
     let info = m.open_console(&id).await.map_err(err)?;
 
     // Bring up the console window (or focus the existing one).
-    let label = format!("console_{id}");
+    let label = console_label(&id)?;
     if let Some(existing) = app.get_webview_window(&label) {
         let _ = existing.set_focus();
         return Ok(info);
@@ -200,7 +207,7 @@ pub async fn open_console(
 
 #[tauri::command]
 pub async fn close_console(app: AppHandle, id: String) -> CmdResult<()> {
-    if let Some(w) = app.get_webview_window(format!("console_{id}").as_str()) {
+    if let Some(w) = app.get_webview_window(console_label(&id)?.as_str()) {
         let _ = w.close();
     }
     Ok(())

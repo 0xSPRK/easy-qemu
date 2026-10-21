@@ -250,7 +250,9 @@ impl Manager {
         {
             let mut run = self.running.lock().await;
             if run.remove(id).is_some() {
-                let _ = std::fs::remove_file(self.store.pidfile(id));
+                if let Ok(p) = self.store.pidfile(id) {
+                    let _ = std::fs::remove_file(p);
+                }
             }
         }
         self.statuses
@@ -462,11 +464,14 @@ impl Manager {
     }
 
     pub async fn has_saved_state(&self, id: &str) -> bool {
-        self.store.saved_state(id).is_file() && !self.running.lock().await.contains_key(id)
+        let Ok(p) = self.store.saved_state(id) else {
+            return false;
+        };
+        p.is_file() && !self.running.lock().await.contains_key(id)
     }
 
     pub async fn discard_saved_state(&self, id: &str) -> Result<()> {
-        let p = self.store.saved_state(id);
+        let p = self.store.saved_state(id)?;
         if p.exists() {
             std::fs::remove_file(&p).map_err(|e| anyhow!("Failed to remove saved state: {e}"))?;
         }
@@ -482,7 +487,7 @@ impl Manager {
                 .cloned()
                 .ok_or_else(|| anyhow!("VM is not running"))?
         };
-        let sav = self.store.saved_state(id);
+        let sav = self.store.saved_state(id)?;
         let _ = std::fs::remove_file(&sav);
 
         let mut q = Qmp::connect(qemu::qmp_addr(info.qmp_port)).await?;
@@ -514,7 +519,7 @@ impl Manager {
             }
         }
         let resume = {
-            let sav = self.store.saved_state(id);
+            let sav = self.store.saved_state(id)?;
             if sav.is_file() {
                 Some(sav)
             } else {
@@ -529,7 +534,9 @@ impl Manager {
 
         // Restored successfully — the state file served its purpose.
         if resume.is_some() {
-            let _ = std::fs::remove_file(self.store.saved_state(id));
+            if let Ok(p) = self.store.saved_state(id) {
+                let _ = std::fs::remove_file(p);
+            }
         }
         {
             let mut run = self.running.lock().await;
@@ -571,7 +578,9 @@ impl Manager {
             .insert(id.to_string(), Status::Shutoff);
         self.stats_cache.write().await.remove(id);
         self.cpu_samples.lock().await.remove(id);
-        let _ = std::fs::remove_file(self.store.pidfile(id));
+        if let Ok(p) = self.store.pidfile(id) {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     async fn connect_running(&self, id: &str) -> Result<Qmp> {
@@ -694,12 +703,15 @@ impl Manager {
 
     // ---------- logs ----------
 
-    pub fn log_path(&self, id: &str) -> PathBuf {
+    pub fn log_path(&self, id: &str) -> Result<PathBuf> {
         self.store.log(id)
     }
 
     pub fn log_tail(&self, id: &str, max_lines: usize) -> String {
-        qemu::log_tail(&self.log_path(id), max_lines)
+        match self.log_path(id) {
+            Ok(p) => qemu::log_tail(&p, max_lines),
+            Err(_) => String::new(),
+        }
     }
 }
 
@@ -1035,6 +1047,19 @@ mod tests {
                 opts: DiskOpts::default(),
             }],
         }
+    }
+
+    /// A hostile id must never reach the filesystem through the manager
+    /// either (audit F-02).
+    #[tokio::test]
+    async fn delete_rejects_a_hostile_id() {
+        let base = tmp_base();
+        let mgr = Manager::new(base.clone()).unwrap();
+        let victim = base.join("victim.json");
+        std::fs::write(&victim, b"{}").unwrap();
+        assert!(mgr.delete("../victim", true).await.is_err());
+        assert!(victim.exists(), "the file outside the store must survive");
+        let _ = std::fs::remove_file(&victim);
     }
 
     /// Creating a disk needs a real `qemu-img`. CI runners do not ship QEMU,
