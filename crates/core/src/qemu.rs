@@ -2,13 +2,31 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::accel;
 use crate::config::Config;
 use crate::qmp::Qmp;
 use crate::store::{RunningInfo, Store};
-use crate::vm::{Accel, CpuModel, DisplayMode, Firmware, Vm};
+use crate::vm::{
+    Accel, AudioBackend, BootFirst, CpuModel, DiskBus, DisplayMode, Firmware, MachineType, RtcBase,
+    VgaModel, Vm,
+};
+
+/// QMP chardev/monitor + pidfile flags.
+fn qmp_args(qmp_port: u16, pidfile: &Path) -> Vec<String> {
+    vec![
+        "-chardev".into(),
+        format!(
+            "socket,host=127.0.0.1,port={},server=on,wait=off,id=qmp0",
+            qmp_port
+        ),
+        "-mon".into(),
+        "chardev=qmp0,mode=control".into(),
+        "-pidfile".into(),
+        pidfile.to_string_lossy().to_string(),
+    ]
+}
 
 pub fn resolve_binary(name: &str, override_path: &Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = override_path {
@@ -64,53 +82,150 @@ pub fn qmp_addr(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port)
 }
 
-pub fn pidfile_path_for(vm: &Vm) -> PathBuf {
-    vm.pidfile_path()
+const VNC_PORT_SEARCH_RANGE: u16 = 20;
+const MAX_DISKS: usize = 8;
+
+/// Everything the arg builder needs besides the VM record itself.
+/// Manager-owned paths live in the store base directory (single source of truth):
+/// pidfile, OVMF vars, logs — never inside user disk folders.
+#[derive(Clone, Debug)]
+pub struct QemuLaunch {
+    pub qmp_port: u16,
+    pub pidfile: PathBuf,
+    /// OVMF VARS flash image for this VM (UEFI only).
+    pub vars_fd: PathBuf,
+    pub vnc_bind: String,
+    /// Bind address for hostfwd rules; empty means all interfaces.
+    pub hostfwd_bind: String,
+    pub accel_resolved: Accel,
+    pub daemonize: bool,
+    /// Restore saved VM state (`-incoming file:...`) instead of fresh boot.
+    pub incoming: Option<PathBuf>,
 }
 
-const VNC_PORT_SEARCH_RANGE: u16 = 20;
+// Resolved-binary hint so find_ovmf can search portable install dirs nearby.
+static BINARY_HINT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
-pub fn build_qemu_args(
-    vm: &Vm,
-    qmp_port: u16,
-    vnc_bind: &str,
-    accel_resolved: Accel,
-    daemonize: bool,
-) -> Result<Vec<String>> {
+fn remember_binary_dir(p: &Path) {
+    if let Ok(mut h) = BINARY_HINT.lock() {
+        *h = p.parent().map(Path::to_path_buf);
+    }
+}
+
+fn last_binary_dir() -> Option<PathBuf> {
+    BINARY_HINT.lock().ok().and_then(|h| h.clone())
+}
+
+pub fn build_qemu_args(vm: &Vm, l: &QemuLaunch) -> Result<Vec<String>> {
+    if vm.disks.is_empty() {
+        bail!("A VM needs at least one disk");
+    }
+    if vm.disks.len() > MAX_DISKS {
+        bail!("Too many disks (max {MAX_DISKS})");
+    }
+
+    // -object entries collected while building sections, emitted afterwards.
+    let mut objects: Vec<String> = vec![];
+    let mut machine_extra: Vec<String> = vec![];
+
     let mut a: Vec<String> = vec![
         "-name".into(),
         vm.name.clone(),
         "-m".into(),
         vm.memory_mb.to_string(),
-        "-smp".into(),
-        vm.cpus.to_string(),
-        "-drive".into(),
-        format!("file={},if=virtio,format=qcow2", vm.disk_path.display()),
     ];
 
-    a.extend(["-nic".into(), net_arg(vm)]);
+    // --- memory backend / huge pages ---
+    if let Some(mp) = vm
+        .mem_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if mp.contains(',') {
+            bail!("Memory path must not contain ',': {mp}");
+        }
+        let prealloc = if vm.mem_prealloc { "on" } else { "off" };
+        objects.push(format!(
+            "memory-backend-file,id=mem,size={m}M,mem-path={mp},share=on,prealloc={prealloc}",
+            m = vm.memory_mb
+        ));
+        machine_extra.push("memory-backend=mem".into());
+    } else if vm.mem_prealloc {
+        a.push("-mem-prealloc".into());
+    }
+
+    // --- machine ---
+    let mut machine_parts: Vec<String> = vec![];
     if let Some(flag) = vm.machine.qemu_flag() {
-        a.extend(["-machine".into(), flag.to_string()]);
+        machine_parts.push(flag.to_string());
     }
-    a.extend(cpu_accel_args(vm, accel_resolved));
-    a.extend(display_args(vm, vnc_bind));
+    machine_parts.append(&mut machine_extra);
+    if !machine_parts.is_empty() {
+        a.extend(["-machine".into(), machine_parts.join(",")]);
+    }
 
+    a.extend(smp_args(vm));
+    a.extend(cpu_accel_args(vm, l.accel_resolved));
+    a.extend(disks_args(vm)?);
+    a.extend(["-nic".into(), net_arg(vm, &l.hostfwd_bind)]);
+    a.extend(video_display_args(vm, &l.vnc_bind));
+
+    // --- input / entropy ---
+    if vm.usb_tablet && vm.machine != MachineType::MicroVm {
+        a.extend(["-usb".into(), "-device".into(), "usb-tablet".into()]);
+    }
+    if vm.rng {
+        objects.push("rng-builtin,id=rng0".into());
+        let dev = if vm.machine == MachineType::MicroVm {
+            "virtio-rng-device"
+        } else {
+            "virtio-rng-pci"
+        };
+        a.extend(["-device".into(), format!("{dev},rng=rng0")]);
+    }
+
+    // --- audio ---
+    a.extend(audio_args(vm));
+
+    // --- rtc / boot ---
+    a.extend([
+        "-rtc".into(),
+        match vm.rtc {
+            RtcBase::Utc => "base=utc".into(),
+            RtcBase::LocalTime => "base=localtime".into(),
+        },
+    ]);
+    if let Some(b) = boot_args(vm) {
+        a.extend(["-boot".into(), b]);
+    }
+
+    // --- firmware ---
     if vm.firmware == Firmware::Uefi {
-        setup_uefi(vm, &mut a)?;
+        setup_uefi(vm, l, &mut a)?;
     }
 
+    // --- cdrom ---
     if let Some(iso) = &vm.iso {
-        a.extend([
-            "-cdrom".into(),
-            iso.display().to_string(),
-            "-boot".into(),
-            "d".into(),
-        ]);
+        a.extend(["-cdrom".into(), iso.display().to_string()]);
     }
 
-    a.extend(qmp_args(qmp_port, &vm.pidfile_path()));
+    // --- objects (iothread, memory backend, rng) ---
+    if vm.disks.iter().any(|d| d.opts.iothread) {
+        objects.push("iothread,id=io0".into());
+    }
+    for o in &objects {
+        a.extend(["-object".into(), o.clone()]);
+    }
 
-    if daemonize {
+    // --- control plumbing ---
+    a.extend(qmp_args(l.qmp_port, &l.pidfile));
+
+    if let Some(state) = &l.incoming {
+        a.extend(["-incoming".into(), format!("file:{}", state.display())]);
+    }
+
+    if l.daemonize {
         #[cfg(target_os = "linux")]
         a.push("-daemonize".into());
     }
@@ -118,34 +233,25 @@ pub fn build_qemu_args(
     Ok(a)
 }
 
-/// `-nic` value: user/tap/none with optional model and hostfwd rules.
-fn net_arg(vm: &Vm) -> String {
-    use crate::vm::NetMode;
-    match vm.net_mode {
-        NetMode::Nat => {
-            let mut nic = "user".to_string();
-            if let Some(m) = vm.net_model.qemu_model() {
-                nic.push_str(&format!(",model={m}"));
-            }
-            for hf in &vm.hostfwd {
-                nic.push(',');
-                nic.push_str(&hf.qemu_fragment());
-            }
-            nic
-        }
-        NetMode::Bridged => {
-            let mut nic = "tap".to_string();
-            if let Some(m) = vm.net_model.qemu_model() {
-                nic.push_str(&format!(",model={m}"));
-            }
-            nic
-        }
-        NetMode::None => "none".to_string(),
+fn smp_args(vm: &Vm) -> Vec<String> {
+    let mut s = vm.cpus.to_string();
+    if let Some(v) = vm.smp_sockets {
+        s.push_str(&format!(",sockets={v}"));
     }
+    if let Some(v) = vm.smp_cores {
+        s.push_str(&format!(",cores={v}"));
+    }
+    if let Some(v) = vm.smp_threads {
+        s.push_str(&format!(",threads={v}"));
+    }
+    if let Some(v) = vm.maxcpus {
+        s.push_str(&format!(",maxcpus={v}"));
+    }
+    vec!["-smp".into(), s]
 }
 
 /// `-cpu` / accelerator flags. `-cpu host` is only valid under KVM;
-/// max is used for WHPX/TCG.
+/// max is used for WHPX/TCG. TCG gets MTTCG (`thread=multi`) for multi-vCPU guests.
 fn cpu_accel_args(vm: &Vm, accel_resolved: Accel) -> Vec<String> {
     let mut a = vec![];
     match vm.cpu {
@@ -161,71 +267,302 @@ fn cpu_accel_args(vm: &Vm, accel_resolved: Accel) -> Vec<String> {
         }
     }
     match accel_resolved {
-        Accel::Kvm => a.push("-enable-kvm".into()),
+        Accel::Kvm => a.extend(["-accel".into(), "kvm".into()]),
         Accel::Whpx => a.extend(["-accel".into(), "whpx".into()]),
-        Accel::Tcg => a.extend(["-accel".into(), "tcg".into()]),
+        Accel::Tcg => {
+            let v = if vm.cpus > 1 {
+                "tcg,thread=multi"
+            } else {
+                "tcg"
+            };
+            a.extend(["-accel".into(), v.into()]);
+        }
         Accel::Auto | Accel::None => {}
     }
     a
 }
 
-/// Display flags. VNC uses a dynamic port search (`to=`); the actual port
-/// is resolved via QMP query-vnc after start.
-fn display_args(vm: &Vm, vnc_bind: &str) -> Vec<String> {
-    match vm.display {
-        DisplayMode::None => vec!["-display".into(), "none".into()],
-        DisplayMode::Vnc => {
-            let start = vm.vnc_display.unwrap_or(0);
-            vec![
-                "-vnc".into(),
-                format!(
-                    "{vb}:{d},to={rng}",
-                    vb = vnc_bind,
-                    d = start,
-                    rng = VNC_PORT_SEARCH_RANGE
-                ),
-            ]
-        }
-        DisplayMode::Gtk => vec!["-display".into(), "gtk".into()],
-        DisplayMode::Sdl => vec!["-display".into(), "sdl".into()],
+/// Drive options shared by every attach flavor.
+fn drive_opts(disk_opts: &crate::vm::DiskOpts) -> String {
+    let mut s = String::new();
+    if let Some(c) = disk_opts.cache.qemu_str() {
+        s.push_str(&format!(",cache={c}"));
     }
+    if let Some(ai) = disk_opts.aio.qemu_str() {
+        s.push_str(&format!(",aio={ai}"));
+    }
+    if disk_opts.discard_unmap {
+        s.push_str(",discard=unmap");
+    }
+    s
 }
 
-/// QMP chardev/monitor + pidfile flags.
-fn qmp_args(qmp_port: u16, pidfile: &Path) -> Vec<String> {
+/// Every disk is attached explicitly (`-drive if=none,id=<did>` + `-device`)
+/// so iothread pinning works uniformly and NVMe is possible.
+fn disks_args(vm: &Vm) -> Result<Vec<String>> {
+    let mut a: Vec<String> = vec![];
+    let mut port: usize = 0;
+    let microvm = vm.machine == MachineType::MicroVm;
+
+    for (i, d) in vm.disks.iter().enumerate() {
+        let did = &d.id;
+        let mut drv = format!(
+            "file={},format=qcow2,id={did},if=none,node-name={did}",
+            d.path.display()
+        );
+        drv.push_str(&drive_opts(&d.opts));
+        if d.opts.iothread {
+            drv.push_str(",iothread=io0");
+        }
+        a.extend(["-drive".into(), drv]);
+
+        let dev = match d.opts.bus {
+            DiskBus::VirtioBlk => {
+                if microvm {
+                    format!("virtio-blk-device,drive={did}")
+                } else {
+                    format!("virtio-blk-pci,drive={did}")
+                }
+            }
+            DiskBus::Nvme => format!("nvme,drive={did},serial={}", short_serial(&vm.id, i)),
+            DiskBus::Sata => {
+                if port >= 6 {
+                    bail!("q35 AHCI has 6 ports — too many sata disks");
+                }
+                let dev = format!("ide-hd,drive={did},bus=ide.{port}");
+                port += 1;
+                dev
+            }
+            DiskBus::Ide => {
+                if port >= 4 {
+                    bail!("PIIX IDE has 4 slots (2 buses x master/slave) — too many ide disks");
+                }
+                let (bus, unit) = (port / 2, port % 2);
+                port += 1;
+                format!("ide-hd,drive={did},bus=ide.{bus},unit={unit}")
+            }
+        };
+        a.extend(["-device".into(), dev]);
+    }
+    Ok(a)
+}
+
+fn short_serial(id: &str, i: usize) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    id.hash(&mut h);
+    i.hash(&mut h);
+    format!("eq{:016x}", h.finish())
+}
+
+/// `-nic` value: user/tap/none with optional model, MAC and hostfwd rules.
+fn net_arg(vm: &Vm, hostfwd_bind: &str) -> String {
+    use crate::vm::NetMode;
+    if vm.net_mode == NetMode::None {
+        return "none".to_string();
+    }
+    let mut nic = match vm.net_mode {
+        NetMode::Nat => "user".to_string(),
+        _ => "tap".to_string(),
+    };
+    if let Some(m) = vm.net_model.qemu_model() {
+        nic.push_str(&format!(",model={m}"));
+    }
+    nic.push_str(&format!(",mac={}", vm.effective_mac()));
+
+    match vm.net_mode {
+        NetMode::Nat => {
+            for hf in &vm.hostfwd {
+                nic.push(',');
+                nic.push_str(&hf.qemu_fragment(hostfwd_bind));
+            }
+        }
+        NetMode::Bridged => {
+            if let Some(ifname) = vm
+                .tap_ifname
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                nic.push_str(&format!(",ifname={ifname}"));
+            }
+            if let Some(br) = vm
+                .tap_br
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                nic.push_str(&format!(",br={br}"));
+            }
+            nic.push_str(",script=no,downscript=no");
+        }
+        NetMode::None => {}
+    }
+    nic
+}
+
+/// Video adapter + display flags. VirGL couples the two: `gl=on` on the
+/// display plus a `virtio-*-gl` device instead of plain `-vga`.
+fn video_display_args(vm: &Vm, vnc_bind: &str) -> Vec<String> {
+    let mut a: Vec<String> = vec![];
+
+    match vm.display {
+        DisplayMode::None => a.extend(["-display".into(), "none".into()]),
+        DisplayMode::Vnc => {
+            let start = vm.vnc_display.unwrap_or(0);
+            let mut v = format!(
+                "{vb}:{d},to={rng}",
+                vb = vnc_bind,
+                d = start,
+                rng = VNC_PORT_SEARCH_RANGE
+            );
+            if vm.vnc_password_auth {
+                v.push_str(",password=on");
+            }
+            a.extend(["-vnc".into(), v]);
+        }
+        DisplayMode::Gtk => a.extend([
+            "-display".into(),
+            if vm.gl {
+                "gtk,gl=on".into()
+            } else {
+                "gtk".into()
+            },
+        ]),
+        DisplayMode::Sdl => a.extend([
+            "-display".into(),
+            if vm.gl {
+                "sdl,gl=on".into()
+            } else {
+                "sdl".into()
+            },
+        ]),
+    }
+
+    if vm.gl {
+        a.extend(["-device".into(), "virtio-vga-gl".into()]);
+        return a;
+    }
+    // Headless + default video: emit nothing (legacy behavior).
+    if vm.vga == VgaModel::Auto && vm.display == DisplayMode::None {
+        return a;
+    }
+    match vm.vga {
+        VgaModel::Ramfb => a.extend(["-device".into(), "ramfb".into()]),
+        VgaModel::None => {} // explicit no-video
+        VgaModel::Std | VgaModel::Qxl | VgaModel::Virtio | VgaModel::Auto => {
+            let mut v = match vm.vga {
+                VgaModel::Qxl => "qxl".to_string(),
+                VgaModel::Virtio => "virtio".to_string(),
+                _ => "std".to_string(),
+            };
+            if matches!(vm.vga, VgaModel::Std | VgaModel::Qxl) {
+                if let Some(mb) = vm.vgamem_mb {
+                    v.push_str(&format!(",vgamem_mb={mb}"));
+                }
+            }
+            a.extend(["-vga".into(), v]);
+        }
+    }
+    a
+}
+
+/// `-audiodev` + Intel HDA card. Microvm has no PCI — skipped silently.
+fn audio_args(vm: &Vm) -> Vec<String> {
+    if vm.audio == AudioBackend::Off || vm.machine == MachineType::MicroVm {
+        return vec![];
+    }
+    let driver = match vm.audio {
+        AudioBackend::Sdl => "sdl",
+        AudioBackend::Spice => "spice",
+        #[cfg(windows)]
+        AudioBackend::Wasapi => "wasapi",
+        #[cfg(windows)]
+        AudioBackend::DirectSound => "dsound",
+        #[cfg(not(windows))]
+        AudioBackend::PulseAudio => "pulseaudio",
+        #[cfg(not(windows))]
+        AudioBackend::Alsa => "alsa",
+        AudioBackend::Off | AudioBackend::Auto => auto_audio_driver(),
+    };
+    let ctrl = if vm.machine == MachineType::Q35 {
+        "ich9-intel-hda"
+    } else {
+        "intel-hda"
+    };
     vec![
-        "-chardev".into(),
-        format!(
-            "socket,host=127.0.0.1,port={},server=on,wait=off,id=qmp0",
-            qmp_port
-        ),
-        "-mon".into(),
-        "chardev=qmp0,mode=control".into(),
-        "-pidfile".into(),
-        pidfile.to_string_lossy().to_string(),
+        "-audiodev".into(),
+        format!("{driver},id=snd0"),
+        "-device".into(),
+        ctrl.into(),
+        "-device".into(),
+        "hda-duplex,audiodev=snd0".into(),
     ]
 }
 
+fn auto_audio_driver() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "wasapi"
+    } else if cfg!(target_os = "macos") {
+        "coreaudio"
+    } else {
+        "pulseaudio"
+    }
+}
+
+/// `-boot` value: order / menu / once-cdrom semantics.
+/// Returns None when everything is default (keeps the command line clean).
+fn boot_args(vm: &Vm) -> Option<String> {
+    let mut parts: Vec<String> = vec![];
+    match vm.boot_first {
+        BootFirst::Disk => {
+            // Fresh ISO present: boot the CD once, then fall back to disk.
+            if vm.iso.is_some() {
+                parts.push("once=d".into());
+            }
+        }
+        other => parts.push(format!("order={}", other.qemu_letter())),
+    }
+    if vm.boot_menu {
+        parts.push("menu=on".into());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(","))
+    }
+}
+
 /// Locate OVMF (UEFI) images: CODE (read-only) and VARS (template copied per VM).
-fn find_ovmf() -> Option<(PathBuf, PathBuf)> {
+/// Also searches relative to the resolved QEMU binary so portable installs work.
+fn find_ovmf(bin_dir: Option<&Path>) -> Option<(PathBuf, PathBuf)> {
     let candidates: &[(&str, &str)] = &[
         ("OVMF_CODE.fd", "OVMF_VARS.fd"),
         ("ovmf_CODE.fd", "ovmf_VARS.fd"),
         ("edk2-x86_64-code.fd", "edk2-i386-vars.fd"),
         ("edk2-x86_64-secure-code.fd", "edk2-i386-vars.fd"),
     ];
-    let dirs: &[&str] = &[
+    let mut dirs: Vec<PathBuf> = [
         "C:\\Program Files\\qemu\\share",
         "C:\\Program Files\\qemu\\share\\edk2-x86_64",
         "/usr/share/OVMF",
         "/usr/share/ovmf",
         "/usr/share/edk2/ovmf",
         "/usr/share/edk2",
-    ];
-    for d in dirs {
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect();
+    if let Some(dir) = bin_dir {
+        dirs.push(dir.to_path_buf());
+        dirs.push(dir.join("share"));
+        dirs.push(dir.join("share").join("edk2-x86_64"));
+    }
+    for d in &dirs {
         for (code, vars) in candidates {
-            let code_p = PathBuf::from(d).join(code);
-            let vars_p = PathBuf::from(d).join(vars);
+            let code_p = d.join(code);
+            let vars_p = d.join(vars);
             if code_p.is_file() && vars_p.is_file() {
                 return Some((code_p, vars_p));
             }
@@ -234,20 +571,26 @@ fn find_ovmf() -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-fn setup_uefi(vm: &Vm, a: &mut Vec<String>) -> Result<()> {
-    let (code, vars_tmpl) = find_ovmf().ok_or_else(|| {
+fn setup_uefi(vm: &Vm, l: &QemuLaunch, a: &mut Vec<String>) -> Result<()> {
+    let (code, vars_tmpl) = find_ovmf(last_binary_dir().as_deref()).ok_or_else(|| {
         anyhow!("UEFI requested but OVMF was not found (OVMF_CODE.fd / OVMF_VARS.fd).")
     })?;
 
-    let vars_path = vm
-        .disk_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!("{}-vars.fd", vm.id));
-
+    let vars_path = &l.vars_fd;
     if !vars_path.exists() {
-        if let Err(e) = std::fs::copy(&vars_tmpl, &vars_path) {
-            return Err(anyhow!("Failed to copy OVMF VARS: {e}"));
+        // Migrate pre-multi-disk layouts: vars used to live next to the disk.
+        let legacy = vm
+            .disks
+            .first()
+            .and_then(|d| d.path.parent())
+            .map(|p| p.join(format!("{}-vars.fd", vm.id)))
+            .filter(|p| p.is_file());
+        if let Some(old) = legacy {
+            std::fs::copy(&old, vars_path)
+                .with_context(|| format!("failed to migrate OVMF VARS from {}", old.display()))?;
+        } else {
+            std::fs::copy(&vars_tmpl, vars_path)
+                .map_err(|e| anyhow!("Failed to copy OVMF VARS: {e}"))?;
         }
     }
 
@@ -261,7 +604,12 @@ fn setup_uefi(vm: &Vm, a: &mut Vec<String>) -> Result<()> {
 }
 
 fn open_log(path: &Path) -> std::fs::File {
-    if let Ok(f) = std::fs::File::create(path) {
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+    {
         return f;
     }
     #[cfg(windows)]
@@ -303,20 +651,30 @@ pub async fn start_vm(
     vm: &Vm,
     cfg: &Config,
     support: &accel::AccelSupport,
+    resume_state: Option<&Path>,
 ) -> Result<RunningInfo> {
     let bin = resolve_binary("qemu-system-x86_64", &cfg.qemu_binary)?;
+    remember_binary_dir(&bin);
     let resolved = accel::effective(vm.accel, support);
     let qmp_port = free_tcp_port()?;
-    let args = build_qemu_args(vm, qmp_port, &cfg.vnc_bind(), resolved, true)?;
+    let launch = QemuLaunch {
+        qmp_port,
+        pidfile: store.base.join(format!("{}.pid", vm.id)),
+        vars_fd: store.base.join(format!("{}-vars.fd", vm.id)),
+        vnc_bind: cfg.vnc_bind(),
+        hostfwd_bind: cfg.hostfwd_bind(),
+        accel_resolved: resolved,
+        daemonize: true,
+        incoming: resume_state.map(Path::to_path_buf),
+    };
+    let args = build_qemu_args(vm, &launch)?;
     let log_path = store.base.join(format!("{}.log", vm.id));
 
+    let stderr = open_log(&log_path);
     let mut cmd = std::process::Command::new(&bin);
-    cmd.args(&args).stdout(open_log(&log_path)).stderr(
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&log_path)
-            .unwrap_or_else(|_| open_log(&log_path)),
-    );
+    cmd.args(&args)
+        .stdout(stderr.try_clone().unwrap_or_else(|_| open_log(&log_path)))
+        .stderr(stderr);
 
     #[cfg(windows)]
     {
@@ -328,7 +686,7 @@ pub async fn start_vm(
         .spawn()
         .with_context(|| format!("failed to launch {}", bin.display()))?;
 
-    let pid = wait_for_pidfile(&mut child, &vm.pidfile_path(), &log_path).await?;
+    let pid = wait_for_pidfile(&mut child, &launch.pidfile, &log_path).await?;
 
     // Wait for QMP readiness and resolve the actual VNC port.
     let vnc_port = wait_qmp_vnc(qmp_port, vm.display == DisplayMode::Vnc).await;
@@ -430,201 +788,4 @@ pub fn hide_window(cmd: &mut tokio::process::Command) {
 pub fn hide_window(_cmd: &mut tokio::process::Command) {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::vm::{
-        Accel, CpuModel, DisplayMode, Firmware, FwdProto, HostFwd, MachineType, NetMode, NetModel,
-        Vm,
-    };
-
-    fn sample_vm(display: DisplayMode) -> Vm {
-        Vm {
-            id: "test".into(),
-            name: "demo".into(),
-            memory_mb: 2048,
-            cpus: 2,
-            disk_size_gb: 20,
-            disk_path: PathBuf::from("/tmp/demo.qcow2"),
-            disk_owned: true,
-            iso: Some(PathBuf::from("/tmp/boot.iso")),
-            accel: Accel::Auto,
-            display,
-            vnc_display: Some(3),
-            machine: MachineType::Auto,
-            firmware: Firmware::Bios,
-            cpu: CpuModel::Auto,
-            net_mode: NetMode::Nat,
-            net_model: NetModel::Auto,
-            hostfwd: vec![],
-        }
-    }
-
-    #[test]
-    fn args_contain_core_options() {
-        let vm = sample_vm(DisplayMode::Vnc);
-        let args = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true).unwrap();
-        let joined = args.join(" ");
-        assert!(joined.contains("-name demo"));
-        assert!(joined.contains("-m 2048"));
-        assert!(joined.contains("-smp 2"));
-        assert!(joined.contains("file=/tmp/demo.qcow2,if=virtio,format=qcow2"));
-        assert!(joined.contains("-nic user"));
-        assert!(joined.contains("-cdrom /tmp/boot.iso"));
-        assert!(joined.contains("-boot d"));
-        assert!(joined.contains("socket,host=127.0.0.1,port=5555,server=on,wait=off,id=qmp0"));
-        assert!(joined.contains("-mon chardev=qmp0,mode=control"));
-        // Dynamic VNC: hint display 3 + search range.
-        assert!(joined.contains("-vnc 127.0.0.1:3,to=20"));
-    }
-
-    #[test]
-    fn headless_has_no_vnc() {
-        let vm = sample_vm(DisplayMode::None);
-        let args = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true).unwrap();
-        let joined = args.join(" ");
-        assert!(joined.contains("-display none"));
-        assert!(!joined.contains("-vnc"));
-    }
-
-    #[test]
-    fn machine_and_cpu_flags() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.machine = MachineType::Q35;
-        vm.cpu = CpuModel::Max;
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-machine q35"));
-        assert!(joined.contains("-cpu max"));
-    }
-
-    #[test]
-    fn host_cpu_falls_back_on_non_kvm() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.cpu = CpuModel::Host;
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Whpx, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-cpu max"));
-        assert!(!joined.contains("-cpu host"));
-        assert!(joined.contains("-accel whpx"));
-    }
-
-    #[test]
-    fn kvm_enables_host_cpu_and_flag() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.cpu = CpuModel::Host;
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Kvm, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-enable-kvm"));
-        assert!(joined.contains("-cpu host"));
-    }
-
-    #[test]
-    fn default_machine_omits_flag() {
-        let vm = sample_vm(DisplayMode::None);
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
-            .unwrap()
-            .join(" ");
-        assert!(!joined.contains("-machine "));
-        assert!(!joined.contains("-cpu"));
-    }
-
-    #[test]
-    fn nat_hostfwd_rules_in_args() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.hostfwd = vec![
-            HostFwd {
-                proto: FwdProto::Tcp,
-                host_port: 2222,
-                guest_port: 22,
-            },
-            HostFwd {
-                proto: FwdProto::Udp,
-                host_port: 5353,
-                guest_port: 53,
-            },
-        ];
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-nic user,hostfwd=tcp::2222-:22,hostfwd=udp::5353-:53"));
-    }
-
-    #[test]
-    fn nat_with_explicit_model_keeps_hostfwd() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.net_model = NetModel::Virtio;
-        vm.hostfwd = vec![HostFwd {
-            proto: FwdProto::Tcp,
-            host_port: 8080,
-            guest_port: 80,
-        }];
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-nic user,model=virtio-net-pci,hostfwd=tcp::8080-:80"));
-    }
-
-    #[test]
-    fn bridged_net_uses_tap() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.net_mode = NetMode::Bridged;
-        vm.net_model = NetModel::E1000;
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-nic tap,model=e1000"));
-    }
-
-    #[test]
-    fn no_net_uses_none() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.net_mode = NetMode::None;
-        let joined = build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true)
-            .unwrap()
-            .join(" ");
-        assert!(joined.contains("-nic none"));
-        assert!(!joined.contains("hostfwd"));
-    }
-
-    #[test]
-    fn uefi_requires_ovmf_present_or_errors() {
-        let mut vm = sample_vm(DisplayMode::None);
-        vm.firmware = Firmware::Uefi;
-        match build_qemu_args(&vm, 5555, "127.0.0.1", Accel::Tcg, true) {
-            Err(e) => assert!(e.to_string().contains("OVMF")),
-            Ok(args) => {
-                let joined = args.join(" ");
-                assert!(joined.contains("if=pflash,format=raw,readonly=on"));
-                assert!(joined.contains("test-vars.fd"));
-            }
-        }
-    }
-
-    #[test]
-    fn free_port_is_available() {
-        let p = free_tcp_port().unwrap();
-        assert!(TcpListener::bind(("127.0.0.1", p)).is_ok());
-    }
-
-    #[test]
-    fn log_tail_limits_lines() {
-        let dir = std::env::temp_dir().join(format!("eq-log-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("x.log");
-        std::fs::write(
-            &p,
-            (1..=50)
-                .map(|i| format!("line{i}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .unwrap();
-        let tail = log_tail(&p, 10);
-        assert_eq!(tail.lines().count(), 10);
-        assert!(tail.ends_with("line50"));
-        assert!(!tail.contains("line39"));
-    }
-}
+mod tests;

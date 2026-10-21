@@ -75,6 +75,9 @@ pub enum Action {
     Resume,
     Reset,
     Shutdown,
+    Suspend,
+    Wakeup,
+    Nmi,
 }
 
 #[tauri::command]
@@ -89,8 +92,69 @@ pub async fn vm_action(
         Action::Resume => QmpAction::Resume,
         Action::Reset => QmpAction::Reset,
         Action::Shutdown => QmpAction::Shutdown,
+        Action::Suspend => QmpAction::Suspend,
+        Action::Wakeup => QmpAction::Wakeup,
+        Action::Nmi => QmpAction::Nmi,
     };
     let res = m.qmp_action(&id, qa).await;
+    crate::emit_statuses(&app);
+    res.map_err(err)
+}
+
+/// Send a key combo (e.g. "ctrl-alt-delete") to the guest.
+#[tauri::command]
+pub async fn vm_sendkey(m: State<'_, Manager>, id: String, keys: String) -> CmdResult<()> {
+    m.send_key(&id, &keys).await.map_err(err)
+}
+
+/// Save a guest screenshot; returns the written file path.
+#[tauri::command]
+pub async fn vm_screendump(m: State<'_, Manager>, id: String) -> CmdResult<String> {
+    m.screendump(&id).await.map_err(err)
+}
+
+/// Adjust guest memory at runtime via the virtio-balloon (MB).
+#[tauri::command]
+pub async fn vm_set_balloon(m: State<'_, Manager>, id: String, mb: u64) -> CmdResult<()> {
+    m.set_balloon(&id, mb).await.map_err(err)
+}
+
+/// Insert/eject the CD image while the VM runs. `None` ejects.
+#[tauri::command]
+pub async fn vm_change_iso(
+    m: State<'_, Manager>,
+    id: String,
+    iso: Option<String>,
+) -> CmdResult<()> {
+    m.change_iso(&id, iso).await.map_err(err)
+}
+
+/// Set the VNC password (requires vnc_password_auth on the VM record).
+#[tauri::command]
+pub async fn vm_set_vnc_password(
+    m: State<'_, Manager>,
+    id: String,
+    password: String,
+) -> CmdResult<()> {
+    m.set_vnc_password(&id, &password).await.map_err(err)
+}
+
+// ---------- saved state (migrate to file) ----------
+
+#[tauri::command]
+pub async fn has_saved_state(m: State<'_, Manager>, id: String) -> CmdResult<bool> {
+    Ok(m.has_saved_state(&id).await)
+}
+
+#[tauri::command]
+pub async fn discard_saved_state(m: State<'_, Manager>, id: String) -> CmdResult<()> {
+    m.discard_saved_state(&id).await.map_err(err)
+}
+
+/// Save the live VM state and stop it. Starting again resumes from the state.
+#[tauri::command]
+pub async fn save_vm_state(app: AppHandle, m: State<'_, Manager>, id: String) -> CmdResult<()> {
+    let res = m.save_state(&id).await;
     crate::emit_statuses(&app);
     res.map_err(err)
 }
@@ -156,38 +220,61 @@ pub fn ssh_connect(m: State<'_, Manager>, id: String) -> CmdResult<SshConfig> {
 // ---------- snapshots ----------
 
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum SnapOp {
     List,
     Create,
     Apply,
     Delete,
+    /// Live variants operate on a RUNNING VM via QMP (all disks at once).
+    LiveList,
+    LiveCreate,
+    LiveApply,
+    LiveDelete,
 }
 
 /// Single entry point for snapshot operations.
-/// `list` returns the snapshots; mutations return an empty vec.
+/// `list`/`live_list` return the snapshots; mutations return an empty vec.
 #[tauri::command]
 pub async fn snapshot_op(
     m: State<'_, Manager>,
     id: String,
     op: SnapOp,
     name: Option<String>,
+    disk_id: Option<String>,
 ) -> CmdResult<Vec<SnapInfo>> {
     let empty = <Vec<SnapInfo>>::new();
+    let name = name.as_deref().unwrap_or_default();
     match op {
-        SnapOp::List => m.snapshot_list(&id).await.map_err(err),
+        SnapOp::List => m.snapshot_list(&id, disk_id).await.map_err(err),
         SnapOp::Create => m
-            .snapshot_create(&id, name.as_deref().unwrap_or_default())
+            .snapshot_create(&id, name, disk_id)
             .await
             .map(|_| empty)
             .map_err(err),
         SnapOp::Apply => m
-            .snapshot_apply(&id, name.as_deref().unwrap_or_default())
+            .snapshot_apply(&id, name, disk_id)
             .await
             .map(|_| empty)
             .map_err(err),
         SnapOp::Delete => m
-            .snapshot_delete(&id, name.as_deref().unwrap_or_default())
+            .snapshot_delete(&id, name, disk_id)
+            .await
+            .map(|_| empty)
+            .map_err(err),
+        SnapOp::LiveList => m.snapshot_live_list(&id).await.map_err(err),
+        SnapOp::LiveCreate => m
+            .snapshot_live_create(&id, name)
+            .await
+            .map(|_| empty)
+            .map_err(err),
+        SnapOp::LiveApply => m
+            .snapshot_live_apply(&id, name)
+            .await
+            .map(|_| empty)
+            .map_err(err),
+        SnapOp::LiveDelete => m
+            .snapshot_live_delete(&id, name)
             .await
             .map(|_| empty)
             .map_err(err),

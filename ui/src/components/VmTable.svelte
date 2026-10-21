@@ -64,7 +64,7 @@
           <td class="c-status"><span class="dot {st}"></span>{st}</td>
           <td class="c-num">{vm.cpus}</td>
           <td class="c-num">{humanMb(vm.memory_mb)}</td>
-          <td class="c-num">{vm.disk_size_gb > 0 ? `${vm.disk_size_gb} GB` : "—"}</td>
+          <td class="c-num">{vm.disks.length > 1 ? `${vm.disks.length} disks` : vm.disks[0]?.size_gb ? `${vm.disks[0].size_gb} GB` : "—"}</td>
           <td>{displayLabel[vm.display] ?? vm.display}</td>
           <td class="c-actions">
             <div class="acts" class:visible={sel}>

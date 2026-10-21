@@ -17,6 +17,7 @@
     qemu_img: null,
     storage_dir: null,
     vnc_bind: null,
+    hostfwd_bind: null,
     theme: "dark",
   });
   let warnings = $state<string[]>([]);
@@ -33,13 +34,13 @@
 
   async function pick(kind: "iso" | "qcow2" | "folder" | "any", field: keyof AppConfig) {
     const p = await api.pickPath(kind);
-    if (p) (cfg as Record<string, unknown>)[field] = p;
+    if (p) (cfg as unknown as Record<string, unknown>)[field] = p;
   }
 
   async function save() {
     busy = true;
     try {
-      for (const k of ["qemu_binary", "qemu_img", "storage_dir", "vnc_bind"] as const) {
+      for (const k of ["qemu_binary", "qemu_img", "storage_dir", "vnc_bind", "hostfwd_bind"] as const) {
         if (typeof cfg[k] === "string" && (cfg[k] as string).trim() === "") cfg[k] = null;
       }
       await api.setConfig(cfg);
@@ -84,6 +85,11 @@
 
     <label class="field" style="margin-top:12px"><span>VNC bind address</span>
       <input type="text" bind:value={cfg.vnc_bind} placeholder="127.0.0.1" />
+    </label>
+
+    <label class="field" style="margin-top:12px"><span>Hostfwd bind address</span>
+      <input type="text" bind:value={cfg.hostfwd_bind} placeholder="(all interfaces)" />
+      <small class="note">Forwarded ports listen here. Set 127.0.0.1 to keep them off the LAN.</small>
     </label>
 
     <!-- detected environment -->

@@ -9,6 +9,8 @@ pub struct Config {
     pub qemu_img: Option<PathBuf>,
     pub storage_dir: Option<PathBuf>,
     pub vnc_bind: Option<String>,
+    /// Bind address for hostfwd rules. Empty/None = all interfaces (legacy behavior).
+    pub hostfwd_bind: Option<String>,
     pub theme: Option<String>,
 }
 
@@ -70,6 +72,15 @@ impl Config {
         self.vnc_bind.clone().unwrap_or_else(|| "127.0.0.1".into())
     }
 
+    /// Bind address for host-forwarded ports; empty string = all interfaces.
+    pub fn hostfwd_bind(&self) -> String {
+        self.hostfwd_bind
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string()
+    }
+
     pub fn storage_dir(&self, base: &Path) -> PathBuf {
         self.storage_dir
             .clone()
@@ -95,12 +106,15 @@ mod tests {
             qemu_img: None,
             storage_dir: None,
             vnc_bind: Some("127.0.0.1".into()),
+            hostfwd_bind: Some("127.0.0.1".into()),
             theme: Some("dark".into()),
         };
         cfg.save(&base).unwrap();
         let loaded = Config::load(&base);
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.config.vnc_bind.as_deref(), Some("127.0.0.1"));
+        assert_eq!(loaded.config.hostfwd_bind().as_str(), "127.0.0.1");
+        assert_eq!(Config::default().hostfwd_bind(), "");
     }
 
     #[test]

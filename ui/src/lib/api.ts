@@ -6,12 +6,22 @@ import type {
   EnvProbe,
   RunningInfo,
   SnapInfo,
+  SnapOp,
   SshConfig,
   Vm,
   VmDraft,
   VmListItem,
   VmUpdate,
 } from "./types";
+
+export type VmActionName =
+  | "pause"
+  | "resume"
+  | "reset"
+  | "shutdown"
+  | "suspend"
+  | "wakeup"
+  | "nmi";
 
 export const api = {
   listVms: () => invoke<VmListItem[]>("list_vms"),
@@ -23,9 +33,22 @@ export const api = {
     invoke<DeleteReport>("delete_vm", { id, deleteDisk }),
 
   startVm: (id: string) => invoke<RunningInfo>("start_vm", { id }),
-  vmAction: (id: string, action: "pause" | "resume" | "reset" | "shutdown") =>
+  vmAction: (id: string, action: VmActionName) =>
     invoke<void>("vm_action", { id, action }),
   forceStop: (id: string) => invoke<void>("force_stop", { id }),
+
+  sendKey: (id: string, keys: string) => invoke<void>("vm_sendkey", { id, keys }),
+  screendump: (id: string) => invoke<string>("vm_screendump", { id }),
+  setBalloon: (id: string, mb: number) => invoke<void>("vm_set_balloon", { id, mb }),
+  changeIso: (id: string, iso: string | null) =>
+    invoke<void>("vm_change_iso", { id, iso }),
+  setVncPassword: (id: string, password: string) =>
+    invoke<void>("vm_set_vnc_password", { id, password }),
+
+  // saved state (migration to file)
+  hasSavedState: (id: string) => invoke<boolean>("has_saved_state", { id }),
+  discardSavedState: (id: string) => invoke<void>("discard_saved_state", { id }),
+  saveVmState: (id: string) => invoke<void>("save_vm_state", { id }),
 
   openConsole: (id: string) => invoke<ConsoleInfo>("open_console", { id }),
   closeConsole: (id: string) => invoke<void>("close_console", { id }),
@@ -35,12 +58,25 @@ export const api = {
   readLog: (id: string, lines?: number) =>
     invoke<string>("read_log", { id, lines: lines ?? null }),
 
-  snapshotOp: (id: string, op: "list" | "create" | "apply" | "delete", name?: string) =>
-    invoke<SnapInfo[]>("snapshot_op", { id, op, name: name ?? null }),
-  snapshotList: (id: string) => api.snapshotOp(id, "list"),
-  snapshotCreate: (id: string, name: string) => api.snapshotOp(id, "create", name),
-  snapshotApply: (id: string, name: string) => api.snapshotOp(id, "apply", name),
-  snapshotDelete: (id: string, name: string) => api.snapshotOp(id, "delete", name),
+  snapshotOp: (
+    id: string,
+    op: SnapOp,
+    name?: string,
+    diskId?: string
+  ) =>
+    invoke<SnapInfo[]>("snapshot_op", {
+      id,
+      op,
+      name: name ?? null,
+      diskId: diskId ?? null,
+    }),
+  snapshotList: (id: string, diskId?: string) => api.snapshotOp(id, "list", undefined, diskId),
+  snapshotCreate: (id: string, name: string, diskId?: string) =>
+    api.snapshotOp(id, "create", name, diskId),
+  snapshotApply: (id: string, name: string, diskId?: string) =>
+    api.snapshotOp(id, "apply", name, diskId),
+  snapshotDelete: (id: string, name: string, diskId?: string) =>
+    api.snapshotOp(id, "delete", name, diskId),
 
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (cfg: AppConfig) => invoke<void>("set_config", { cfg }),
@@ -57,6 +93,14 @@ export function humanMb(mb: number): string {
   return `${mb} MB`;
 }
 
+export function humanBytes(b: number): string {
+  if (!b) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log2(b) / 10));
+  const v = b / 2 ** (10 * i);
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 export function uptimeStr(startedAt: number | null): string {
   if (!startedAt) return "—";
   const now = Math.floor(Date.now() / 1000);
@@ -67,4 +111,8 @@ export function uptimeStr(startedAt: number | null): string {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${sec}s`;
   return `${sec}s`;
+}
+
+export function cleanErr(e: unknown): string {
+  return String(e).replace(/^[^:]*Error:\s*/, "").trim();
 }

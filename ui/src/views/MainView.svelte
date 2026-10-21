@@ -75,7 +75,7 @@
 
   function askDelete(vm: VmListItem) {
     confirmDelete = vm;
-    deleteDisk = vm.disk_owned;
+    deleteDisk = vm.disks.some((d) => d.owned);
   }
 
   const doDelete = () =>
@@ -84,8 +84,11 @@
       confirmDelete = null;
       const report = await api.deleteVm(vm.id, deleteDisk);
       for (const e of report.errors) toast(e, "error");
-      if (!report.disk_attempted && deleteDisk && !vm.disk_owned) {
-        toast("External disk kept (not owned by Easy QEMU)", "info");
+      if (report.disk_attempted && report.disks_deleted > 0) {
+        toast(`Removed ${report.disks_deleted} managed disk file(s)`, "info");
+      }
+      if (!report.disk_attempted && deleteDisk && !vm.disks.some((d) => d.owned)) {
+        toast("External disks kept (not owned by Easy QEMU)", "info");
       }
       await reloadVms();
       toast(`VM "${vm.name}" deleted`, "success");
@@ -198,7 +201,13 @@
 </div>
 
 {#if showForm}
-  <VmForm existing={editTarget?.vm ?? null} onclose={() => (showForm = false)} />
+  <VmForm
+    existing={editTarget}
+    onclose={() => {
+      showForm = false;
+      editTarget = null;
+    }}
+  />
 {/if}
 
 {#if showSettings}
@@ -218,19 +227,24 @@
     onclose={() => (confirmDelete = null)}
   >
     <div class="body">
-      {#if confirmDelete.disk_owned}
+      {#if confirmDelete.disks.some((d) => d.owned)}
         <label style="display:flex; gap:8px; align-items:center; cursor:pointer">
           <input type="checkbox" bind:checked={deleteDisk} />
-          Also delete the disk file
+          Also delete managed disk files ({confirmDelete.disks.filter((d) => d.owned).length})
         </label>
-        <p class="mono dim path">{confirmDelete.disk_path}</p>
+        {#each confirmDelete.disks.filter((d) => d.owned) as d}
+          <p class="mono dim path">{d.path}</p>
+        {/each}
         {#if !deleteDisk}
-          <p style="color: var(--fg3); margin: 8px 0 0">The disk file will be kept.</p>
+          <p style="color: var(--fg3); margin: 8px 0 0">Disk files will be kept.</p>
         {/if}
       {:else}
         <p style="margin:0">
-          This VM uses an external disk — the disk file will NOT be removed.
+          This VM uses only external disks — no disk files will be removed.
         </p>
+      {/if}
+      {#if confirmDelete.disks.some((d) => !d.owned)}
+        <p class="dim path">External disks are always kept.</p>
       {/if}
     </div>
     <footer>

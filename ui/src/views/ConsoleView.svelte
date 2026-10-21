@@ -39,7 +39,7 @@
         connected = true;
         wakeToolbar();
       });
-      rfb.addEventListener("disconnect", (e) => {
+      rfb.addEventListener("disconnect", (e: Event) => {
         connected = false;
         toolbarVisible = true;
         const detail = (e as CustomEvent).detail as { clean?: boolean };

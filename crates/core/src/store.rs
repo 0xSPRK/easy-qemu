@@ -32,10 +32,16 @@ impl RunningInfo {
 #[derive(Serialize, Clone, Debug)]
 pub struct DeleteReport {
     pub json_removed: bool,
+    /// Manager-owned auxiliary files removed from the base dir
+    /// (pidfile, OVMF vars, log, saved state).
     pub pidfile_removed: bool,
+    pub vars_removed: bool,
+    pub log_removed: bool,
+    pub sav_removed: bool,
     /// Whether a disk file removal was attempted.
     pub disk_attempted: bool,
-    pub disk_deleted: bool,
+    /// Number of disk files successfully removed.
+    pub disks_deleted: usize,
     /// Deletion errors (e.g. file locked by a process) — shown in the UI.
     pub errors: Vec<String>,
 }
@@ -58,6 +64,24 @@ impl Store {
         })
     }
 
+    // ---------- manager-owned per-VM files ----------
+
+    pub fn pidfile(&self, id: &str) -> PathBuf {
+        self.base.join(format!("{id}.pid"))
+    }
+    pub fn vars_fd(&self, id: &str) -> PathBuf {
+        self.base.join(format!("{id}-vars.fd"))
+    }
+    pub fn log(&self, id: &str) -> PathBuf {
+        self.base.join(format!("{id}.log"))
+    }
+    /// Saved VM state produced by live migration (`migrate file:`).
+    pub fn saved_state(&self, id: &str) -> PathBuf {
+        self.base.join(format!("{id}.sav"))
+    }
+
+    // ---------- vm records ----------
+
     pub fn list_vms(&self) -> Result<Vec<Vm>> {
         let entries = match std::fs::read_dir(&self.vms_dir) {
             Ok(e) => e,
@@ -75,7 +99,7 @@ impl Store {
     /// Reads one VM record; broken files are skipped with a note on stderr.
     fn read_vm_file(path: &std::path::Path) -> Option<Vm> {
         let s = std::fs::read_to_string(path).ok()?;
-        match serde_json::from_str::<Vm>(&s) {
+        match Self::parse_vm(&s) {
             Ok(vm) => Some(vm),
             Err(e) => {
                 eprintln!("skip broken vm file {}: {e}", path.display());
@@ -84,13 +108,20 @@ impl Store {
         }
     }
 
+    /// Parse + normalize (legacy single-disk records become `disks` entries).
+    pub fn parse_vm(s: &str) -> Result<Vm> {
+        let mut vm: Vm = serde_json::from_str(s)?;
+        vm.normalize();
+        Ok(vm)
+    }
+
     pub fn get_vm(&self, id: &str) -> Result<Option<Vm>> {
         let p = self.vms_dir.join(format!("{id}.json"));
         if !p.exists() {
             return Ok(None);
         }
         let s = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-        Ok(Some(serde_json::from_str(&s)?))
+        Ok(Some(Self::parse_vm(&s)?))
     }
 
     /// Atomic write: tmp + rename.
@@ -102,44 +133,72 @@ impl Store {
         Ok(())
     }
 
-    /// Delete a VM. The disk file is touched ONLY if it was created by the
-    /// manager (`disk_owned`) and the user confirmed deletion.
-    pub fn delete_vm(&self, id: &str, delete_disk: bool) -> Result<DeleteReport> {
+    /// Delete a VM record and manager-owned files. Disk files are touched ONLY
+    /// when they were created by the manager (`disk.owned`) and the user
+    /// confirmed deletion. Never fails hard: problems land in `report.errors`.
+    pub fn delete_vm(&self, id: &str, delete_disks: bool) -> Result<DeleteReport> {
         let mut report = DeleteReport {
             json_removed: false,
             pidfile_removed: false,
+            vars_removed: false,
+            log_removed: false,
+            sav_removed: false,
             disk_attempted: false,
-            disk_deleted: false,
+            disks_deleted: 0,
             errors: vec![],
         };
         let vm = self.get_vm(id)?;
 
         if let Some(ref vm) = vm {
-            Self::try_delete_disk(vm, delete_disk, &mut report);
-            let _ = std::fs::remove_file(vm.pidfile_path());
-            report.pidfile_removed = true;
+            if delete_disks {
+                for d in vm.disks.iter().filter(|d| d.owned) {
+                    report.disk_attempted = true;
+                    if !d.path.exists() {
+                        continue; // already absent — goal achieved
+                    }
+                    match std::fs::remove_file(&d.path) {
+                        Ok(_) => report.disks_deleted += 1,
+                        Err(e) => report
+                            .errors
+                            .push(format!("Failed to delete disk {}: {e}", d.path.display())),
+                    }
+                }
+            }
+            report.pidfile_removed = self.remove_aux(&self.pidfile(id), &mut report.errors);
+            report.vars_removed = self.remove_aux(&self.vars_fd(id), &mut report.errors);
+            report.log_removed = self.remove_aux(&self.log(id), &mut report.errors);
+            report.sav_removed = self.remove_aux(&self.saved_state(id), &mut report.errors);
+
+            // Legacy UEFI vars next to the first disk (pre-multi-disk layout).
+            if let Some(old_vars) = vm
+                .disks
+                .first()
+                .and_then(|d| d.path.parent())
+                .map(|p| p.join(format!("{id}-vars.fd")))
+                .filter(|p| p.is_file())
+            {
+                let _ = std::fs::remove_file(&old_vars);
+            }
+        } else {
+            // No record — still clean up whatever aux files exist.
+            report.pidfile_removed = self.remove_aux(&self.pidfile(id), &mut report.errors);
+            report.sav_removed = self.remove_aux(&self.saved_state(id), &mut report.errors);
         }
 
         report.json_removed = self.remove_vm_record(id, &mut report);
         Ok(report)
     }
 
-    /// Removes the qcow2 file when the VM owns its disk and deletion was requested.
-    fn try_delete_disk(vm: &Vm, requested: bool, report: &mut DeleteReport) {
-        report.disk_attempted = requested && vm.disk_owned;
-        if !report.disk_attempted {
-            return;
+    fn remove_aux(&self, path: &std::path::Path, errors: &mut Vec<String>) -> bool {
+        if !path.exists() {
+            return true;
         }
-        if !vm.disk_path.exists() {
-            report.disk_deleted = true; // already absent — goal achieved
-            return;
-        }
-        match std::fs::remove_file(&vm.disk_path) {
-            Ok(_) => report.disk_deleted = true,
-            Err(e) => report.errors.push(format!(
-                "Failed to delete disk {}: {e}",
-                vm.disk_path.display()
-            )),
+        match std::fs::remove_file(path) {
+            Ok(_) => true,
+            Err(e) => {
+                errors.push(format!("Failed to remove {}: {e}", path.display()));
+                false
+            }
         }
     }
 
@@ -159,6 +218,8 @@ impl Store {
         }
     }
 
+    // ---------- running state ----------
+
     pub fn load_running(&self) -> Result<HashMap<String, RunningInfo>> {
         if !self.running_file.exists() {
             return Ok(HashMap::new());
@@ -173,5 +234,131 @@ impl Store {
         std::fs::write(&tmp, serde_json::to_string_pretty(m)?)?;
         std::fs::rename(&tmp, &self.running_file)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vm::{DiskBus, DiskEntry, DiskOpts};
+
+    fn tmp_base() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eq-store-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn vm_with_disks(base: &std::path::Path) -> Vm {
+        let d0 = base.join("main.qcow2");
+        let d1 = base.join("extra.qcow2");
+        for p in [&d0, &d1] {
+            std::fs::write(p, b"fake").unwrap();
+        }
+        Vm {
+            id: "vmx".into(),
+            name: "x".into(),
+            memory_mb: 256,
+            cpus: 1,
+            disks: vec![
+                DiskEntry {
+                    id: "d0".into(),
+                    path: d0,
+                    size_gb: 10,
+                    owned: true,
+                    opts: DiskOpts {
+                        bus: DiskBus::VirtioBlk,
+                        ..Default::default()
+                    },
+                },
+                DiskEntry {
+                    id: "d1".into(),
+                    path: d1,
+                    size_gb: 0,
+                    owned: false,
+                    opts: DiskOpts {
+                        bus: DiskBus::Nvme,
+                        cache: crate::vm::CacheMode::None,
+                        ..Default::default()
+                    },
+                },
+            ],
+            iso: None,
+            accel: Default::default(),
+            display: DisplayMode::None,
+            vnc_display: None,
+            machine: Default::default(),
+            firmware: Default::default(),
+            cpu: Default::default(),
+            smp_sockets: None,
+            smp_cores: None,
+            smp_threads: None,
+            maxcpus: None,
+            rng: true,
+            usb_tablet: true,
+            vga: Default::default(),
+            vgamem_mb: None,
+            gl: false,
+            mem_prealloc: false,
+            mem_path: None,
+            rtc: Default::default(),
+            audio: Default::default(),
+            vnc_password_auth: false,
+            boot_first: Default::default(),
+            boot_menu: false,
+            net_mode: Default::default(),
+            net_model: Default::default(),
+            mac_address: None,
+            tap_ifname: None,
+            tap_br: None,
+            hostfwd: vec![],
+            ssh: Default::default(),
+            legacy_disk_path: None,
+            legacy_disk_size_gb: None,
+            legacy_disk_owned: None,
+        }
+    }
+
+    #[test]
+    fn roundtrip_and_multi_disk_delete() {
+        let base = tmp_base();
+        let store = Store::new(base.clone()).unwrap();
+        let vm = vm_with_disks(&base);
+        store.save_vm(&vm).unwrap();
+
+        let loaded = store.get_vm("vmx").unwrap().unwrap();
+        assert_eq!(loaded.disks.len(), 2);
+        assert_eq!(loaded.disks[1].opts.cache, crate::vm::CacheMode::None);
+
+        let report = store.delete_vm("vmx", true).unwrap();
+        assert!(report.json_removed);
+        assert!(report.pidfile_removed); // absent counts as removed
+        assert_eq!(report.disks_deleted, 1); // only the owned one
+        assert!(!vm.disks[0].path.exists());
+        assert!(vm.disks[1].path.exists());
+        let _ = std::fs::remove_file(&vm.disks[1].path);
+    }
+
+    #[test]
+    fn keep_disks_flag_preserves_files() {
+        let base = tmp_base();
+        let store = Store::new(base.clone()).unwrap();
+        let vm = vm_with_disks(&base);
+        store.save_vm(&vm).unwrap();
+        let report = store.delete_vm("vmx", false).unwrap();
+        assert!(!report.disk_attempted);
+        assert!(vm.disks[0].path.exists());
+        assert!(vm.disks[1].path.exists());
+        let _ = std::fs::remove_file(&vm.disks[0].path);
+        let _ = std::fs::remove_file(&vm.disks[1].path);
+    }
+
+    #[test]
+    fn legacy_record_parses_into_disks() {
+        let json = r#"{"id":"a","name":"old","memory_mb":512,"cpus":1,
+            "disk_size_gb":5,"disk_path":"/d/o.qcow2","disk_owned":false,
+            "iso":null,"accel":"auto","display":"none","vnc_display":null}"#;
+        let vm = Store::parse_vm(json).unwrap();
+        assert_eq!(vm.disks.len(), 1);
+        assert!(!vm.disks[0].owned);
     }
 }
