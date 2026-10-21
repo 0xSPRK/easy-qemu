@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a new capability or an improvement
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first — the solution usually becomes obvious
+        afterwards, and it helps to know whether the same need is already
+        covered somewhere else.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Easy QEMU to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does this belong to?
+      options:
+        - Virtual machines
+        - Console / noVNC
+        - Networking
+        - Snapshots / saved state
+        - Statistics
+        - SSH
+        - Settings / configuration
+        - Packaging / installers
+        - Something else
