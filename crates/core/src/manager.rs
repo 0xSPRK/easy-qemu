@@ -313,13 +313,15 @@ impl Manager {
                     folder,
                     opts,
                 } => {
-                    let folder = match folder.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        Some(f) => PathBuf::from(f).join(&v.name),
-                        None => cfg.storage_dir(&self.base).join(&v.name),
+                    let parent = match folder.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        Some(f) => PathBuf::from(f),
+                        None => cfg.storage_dir(&self.base),
                     };
+                    let folder = disk_folder(&parent, &v.name)?;
                     std::fs::create_dir_all(&folder).map_err(|e| {
                         anyhow!("Failed to create disk folder {}: {e}", folder.display())
                     })?;
+                    ensure_inside(&parent, &folder)?;
                     let path = folder.join(format!("{id}-d{i}.qcow2"));
                     let img = qemu::resolve_binary("qemu-img", &cfg.qemu_img)?;
                     qemu::create_disk(&img, &path, *size_gb).await?;
@@ -942,6 +944,37 @@ fn gen_id() -> String {
     format!("vm{}", uuid::Uuid::new_v4().simple())
 }
 
+/// The folder that holds the disks of a new VM: a direct child of `parent`
+/// named after the VM. The name is validated first, so it can neither escape
+/// the parent nor replace it with an absolute path.
+fn disk_folder(parent: &Path, name: &str) -> Result<PathBuf> {
+    let name = crate::validate::vm_name(name)?;
+    let folder = parent.join(name);
+    if folder.parent() != Some(parent) {
+        bail!("Invalid disk folder name");
+    }
+    Ok(folder)
+}
+
+/// Defense in depth: resolve both paths (symlinks included) and require the
+/// child to stay inside its parent.
+fn ensure_inside(parent: &Path, child: &Path) -> Result<()> {
+    let parent = parent
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to resolve {}: {e}", parent.display()))?;
+    let child = child
+        .canonicalize()
+        .map_err(|e| anyhow!("Failed to resolve {}: {e}", child.display()))?;
+    if !child.starts_with(&parent) {
+        bail!(
+            "Disk folder {} is outside {}",
+            child.display(),
+            parent.display()
+        );
+    }
+    Ok(())
+}
+
 /// Query guest status over a short-lived QMP connection.
 /// None = QMP unreachable.
 async fn probe_status(qmp_port: u16) -> Option<String> {
@@ -1004,8 +1037,21 @@ mod tests {
         }
     }
 
+    /// Creating a disk needs a real `qemu-img`. CI runners do not ship QEMU,
+    /// so the tests that create disks are skipped when it is missing.
+    fn qemu_img_available() -> bool {
+        let found = qemu::resolve_binary("qemu-img", &None).is_ok();
+        if !found {
+            eprintln!("skipping: qemu-img not found on this host");
+        }
+        found
+    }
+
     #[tokio::test]
     async fn create_and_list_roundtrip() {
+        if !qemu_img_available() {
+            return;
+        }
         let mgr = Manager::new(tmp_base()).unwrap();
         let vm = mgr.create(draft("alpha")).await.unwrap();
         assert!(vm.disks[0].owned);
@@ -1017,6 +1063,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_owned_disk_removes_file_and_record() {
+        if !qemu_img_available() {
+            return;
+        }
         let mgr = Manager::new(tmp_base()).unwrap();
         let vm = mgr.create(draft("beta")).await.unwrap();
         let disk = vm.disks[0].path.clone();
@@ -1029,6 +1078,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_keep_disk_preserves_file() {
+        if !qemu_img_available() {
+            return;
+        }
         let mgr = Manager::new(tmp_base()).unwrap();
         let vm = mgr.create(draft("gamma")).await.unwrap();
         let disk = vm.disks[0].path.clone();
@@ -1036,6 +1088,38 @@ mod tests {
         assert!(!report.disk_attempted);
         assert!(disk.exists());
         let _ = std::fs::remove_file(&disk);
+    }
+
+    /// A VM name must never become a path component that escapes the disk
+    /// directory (audit F-01).
+    #[tokio::test]
+    async fn create_rejects_names_that_escape_the_disk_dir() {
+        let mgr = Manager::new(tmp_base()).unwrap();
+        for name in ["..", "../victim", "..\\victim", "C:\\Windows\\Temp", "/etc"] {
+            assert!(
+                mgr.create(draft(name)).await.is_err(),
+                "must reject the name {name:?}"
+            );
+        }
+    }
+
+    /// The disk of a new VM lives inside the configured storage directory.
+    #[tokio::test]
+    async fn create_keeps_disks_inside_the_storage_dir() {
+        if !qemu_img_available() {
+            return;
+        }
+        let base = tmp_base();
+        let mgr = Manager::new(base.clone()).unwrap();
+        let vm = mgr.create(draft("inside")).await.unwrap();
+        let disk = vm.disks[0].path.clone();
+        let storage = base.join("disks");
+        assert!(
+            disk.starts_with(&storage),
+            "disk {} must live under {}",
+            disk.display(),
+            storage.display()
+        );
     }
 
     #[tokio::test]

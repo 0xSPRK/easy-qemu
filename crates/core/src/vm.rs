@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::validate;
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -751,10 +753,7 @@ impl Vm {
     /// Normalize + validate everything that does not depend on the host FS layout.
     pub fn validate(&mut self) -> Result<()> {
         self.normalize();
-        let name = self.name.trim();
-        if name.is_empty() {
-            bail!("Name cannot be empty");
-        }
+        validate::vm_name(&self.name)?;
         if self.memory_mb == 0 {
             bail!("Memory (MB) must be a number > 0");
         }
@@ -964,10 +963,7 @@ pub struct ValidatedDraft {
 impl VmDraft {
     /// Form field validation. Errors are human-readable and shown in the UI.
     pub fn validate(&self) -> Result<ValidatedDraft> {
-        let name = self.name.trim();
-        if name.is_empty() {
-            bail!("Name cannot be empty");
-        }
+        let name = validate::vm_name(&self.name)?;
         if self.memory_mb == 0 {
             bail!("Memory (MB) must be a number > 0");
         }

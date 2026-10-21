@@ -272,7 +272,13 @@ mod tests {
     #[test]
     fn disk_id_rejects_option_injection() {
         assert!(disk_id("d0").is_ok());
-        for bad in ["", "d0,evil=1", "d0 id", "d0/x", "a".repeat(DISK_ID_MAX_LEN + 1).as_str()] {
+        for bad in [
+            "",
+            "d0,evil=1",
+            "d0 id",
+            "d0/x",
+            "a".repeat(DISK_ID_MAX_LEN + 1).as_str(),
+        ] {
             assert!(disk_id(bad).is_err(), "must reject {bad:?}");
         }
     }
@@ -323,7 +329,10 @@ mod tests {
     #[test]
     fn commas_are_escaped_for_qemu_options() {
         assert_eq!(escape_commas("a,b"), "a,,b");
-        assert_eq!(qemu_path(Path::new("C:/disks/my,disk.qcow2")), "C:/disks/my,,disk.qcow2");
+        assert_eq!(
+            qemu_path(Path::new("C:/disks/my,disk.qcow2")),
+            "C:/disks/my,,disk.qcow2"
+        );
         assert_eq!(escape_commas("plain"), "plain");
     }
 }
