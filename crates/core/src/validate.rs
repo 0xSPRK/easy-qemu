@@ -95,6 +95,20 @@ pub fn disk_size_gb(size: u32) -> Result<u32> {
     Ok(size)
 }
 
+/// The format of a disk image. Only the QEMU formats are supported, because
+/// the manager attaches every disk with `format=qcow2`.
+pub fn disk_extension(path: &Path) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "qcow2" && ext != "qcow" {
+        bail!("Only disks in the qcow2/qcow format are supported");
+    }
+    Ok(())
+}
+
 /// A TCP port. Zero is never a usable port.
 pub fn port(port: u16) -> Result<u16> {
     if port == 0 {
@@ -289,6 +303,16 @@ mod tests {
         assert_eq!(disk_size_gb(DISK_SIZE_MAX_GB).unwrap(), DISK_SIZE_MAX_GB);
         assert!(disk_size_gb(0).is_err());
         assert!(disk_size_gb(DISK_SIZE_MAX_GB + 1).is_err());
+    }
+
+    #[test]
+    fn only_qcow_formats_are_accepted() {
+        assert!(disk_extension(Path::new("/tmp/a.qcow2")).is_ok());
+        assert!(disk_extension(Path::new("/tmp/a.QCOW2")).is_ok());
+        assert!(disk_extension(Path::new("/tmp/a.qcow")).is_ok());
+        for bad in ["/tmp/a.img", "/tmp/a", "/tmp/a.iso", "/tmp/a.qcow2.txt"] {
+            assert!(disk_extension(Path::new(bad)).is_err(), "must reject {bad}");
+        }
     }
 
     #[test]

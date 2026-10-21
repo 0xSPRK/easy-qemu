@@ -337,14 +337,7 @@ impl Manager {
                 }
                 crate::vm::DiskSpec::Existing { path, opts } => {
                     let p = PathBuf::from(path.trim());
-                    let ext_ok = p
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.eq_ignore_ascii_case("qcow2") || e.eq_ignore_ascii_case("qcow"))
-                        .unwrap_or(false);
-                    if !ext_ok {
-                        bail!("Only disks in the qcow2/qcow format are supported");
-                    }
+                    crate::validate::disk_extension(&p)?;
                     if !p.is_file() {
                         bail!("Disk file not found: {}", p.display());
                     }

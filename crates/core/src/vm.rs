@@ -1030,11 +1030,15 @@ impl VmDraft {
             if spec.opts().aio == AioMode::IoUring && !cfg!(target_os = "linux") {
                 bail!("aio=io_uring is only available on Linux hosts");
             }
-            if let DiskSpec::Existing { path, .. } = spec {
-                if PathBuf::from(path.trim()).extension() != Some(std::ffi::OsStr::new("qcow2"))
-                    && PathBuf::from(path.trim()).extension() != Some(std::ffi::OsStr::new("qcow"))
-                {
-                    // extension check is advisory here; existence is checked in create()
+            match spec {
+                DiskSpec::New { size_gb, .. } => {
+                    crate::validate::disk_size_gb(*size_gb)?;
+                }
+                DiskSpec::Existing { path, .. } => {
+                    // The extension is checked here as well, so the form
+                    // reports the problem before the VM is created
+                    // (audit F-22).
+                    crate::validate::disk_extension(&PathBuf::from(path.trim()))?;
                 }
             }
         }
@@ -1245,6 +1249,42 @@ mod tests {
         assert_eq!(v.disks[0].opts().cache, CacheMode::None);
         assert!(v.disks[0].opts().discard_unmap);
         assert!(v.disks[0].opts().iothread);
+    }
+
+    /// The size of a new disk is checked before the image is created
+    /// (audit F-17).
+    #[test]
+    fn draft_rejects_a_new_disk_without_a_valid_size() {
+        for size in [0, 100_000] {
+            let json = format!(
+                r#"{{
+                    "name":"x","memory_mb":256,"cpus":1,"iso":null,
+                    "accel":"auto","display":"none","machine":"q35","firmware":"bios",
+                    "cpu":"auto","net_mode":"nat","net_model":"auto",
+                    "disks":[{{"kind":"new","size_gb":{size},"folder":null}}]
+                }}"#
+            );
+            let d: VmDraft = serde_json::from_str(&json).unwrap();
+            assert!(d.validate().is_err(), "size {size} must be rejected");
+        }
+    }
+
+    /// An attached disk must be in a format the manager can use
+    /// (audit F-22).
+    #[test]
+    fn draft_rejects_an_existing_disk_with_a_wrong_extension() {
+        for path in ["/tmp/demo.img", "/tmp/demo", "/tmp/demo.iso"] {
+            let json = format!(
+                r#"{{
+                    "name":"x","memory_mb":256,"cpus":1,"iso":null,
+                    "accel":"auto","display":"none","machine":"q35","firmware":"bios",
+                    "cpu":"auto","net_mode":"nat","net_model":"auto",
+                    "disks":[{{"kind":"existing","path":"{path}"}}]
+                }}"#
+            );
+            let d: VmDraft = serde_json::from_str(&json).unwrap();
+            assert!(d.validate().is_err(), "{path} must be rejected");
+        }
     }
 
     #[test]
