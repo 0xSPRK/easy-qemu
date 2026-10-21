@@ -139,7 +139,7 @@ impl Manager {
         std::fs::create_dir_all(&storage)?;
         let store = Store::new(base.clone())?;
         let running = store.load_running().unwrap_or_default();
-        Ok(Manager {
+        let manager = Manager {
             base,
             store,
             cfg: RwLock::new(cfg),
@@ -151,7 +151,54 @@ impl Manager {
             stats_cache: RwLock::new(HashMap::new()),
             cpu_samples: Mutex::new(HashMap::new()),
             poll_ticks: AtomicUsize::new(0),
-        })
+        };
+        manager.adopt_legacy_disks(&storage);
+        Ok(manager)
+    }
+
+    /// Take over the disks of the records that were written before the
+    /// registry existed. Only a disk inside the storage directory that
+    /// carries the name the manager gives it is taken over; every other file
+    /// stays untouched (audit F-03).
+    fn adopt_legacy_disks(&self, storage: &Path) {
+        let Ok(vms) = self.store.list_vms() else {
+            return;
+        };
+        let mut owned = self.store.load_owned();
+        let mut changed = false;
+        for vm in vms {
+            for (i, d) in vm.disks.iter().enumerate() {
+                if !d.owned {
+                    continue;
+                }
+                let key = d.path.to_string_lossy().to_string();
+                if owned.contains_key(&key) {
+                    continue;
+                }
+                let expected = format!("{}-d{i}.qcow2", vm.id);
+                if d.path.file_name().and_then(|n| n.to_str()) != Some(expected.as_str()) {
+                    continue;
+                }
+                if !is_inside(storage, &d.path) {
+                    continue;
+                }
+                match std::fs::symlink_metadata(&d.path) {
+                    Ok(m) if m.is_file() => {}
+                    _ => continue,
+                }
+                owned.insert(
+                    key,
+                    crate::store::OwnedDisk {
+                        vm_id: vm.id.clone(),
+                        size_gb: d.size_gb,
+                    },
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = self.store.save_owned(&owned);
+        }
     }
 
     pub fn base_dir(&self) -> &Path {
@@ -327,6 +374,10 @@ impl Manager {
                     let path = folder.join(format!("{id}-d{i}.qcow2"));
                     let img = qemu::resolve_binary("qemu-img", &cfg.qemu_img)?;
                     qemu::create_disk(&img, &path, *size_gb).await?;
+                    // The registry of the disks of the manager: only a disk
+                    // that is listed there is deleted with the VM
+                    // (audit F-03).
+                    self.store.register_owned(&path, &id, *size_gb)?;
                     entries.push(crate::vm::DiskEntry {
                         id: format!("d{i}"),
                         path,
@@ -408,7 +459,17 @@ impl Manager {
         vm.name = patch.name;
         vm.memory_mb = patch.memory_mb;
         vm.cpus = patch.cpus;
-        vm.disks = patch.disks;
+        // The ownership of a disk is computed, not taken from the request:
+        // only a disk the manager created itself may be deleted with the VM
+        // (audit F-03).
+        vm.disks = patch
+            .disks
+            .into_iter()
+            .map(|mut d| {
+                d.owned = self.store.is_owned(&d.path);
+                d
+            })
+            .collect();
         vm.iso = patch.iso;
         vm.accel = patch.accel;
         vm.display = patch.display;
@@ -978,6 +1039,18 @@ fn ensure_inside(parent: &Path, child: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Whether the file lives inside the given directory. Both paths are
+/// resolved first, so a symlink cannot point out of it.
+fn is_inside(root: &Path, file: &Path) -> bool {
+    let (Ok(root), Some(parent)) = (root.canonicalize(), file.parent()) else {
+        return false;
+    };
+    match parent.canonicalize() {
+        Ok(parent) => parent.starts_with(&root),
+        Err(_) => false,
+    }
 }
 
 /// Query guest status over a short-lived QMP connection.

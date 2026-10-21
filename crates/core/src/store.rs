@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 use crate::validate;
 use crate::vm::{DisplayMode, Vm};
 
+/// A disk image that the manager created itself. Only such a disk may be
+/// deleted together with the VM (audit F-03).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OwnedDisk {
+    /// The VM the disk belongs to.
+    pub vm_id: String,
+    /// The size the image was created with.
+    pub size_gb: u32,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RunningInfo {
     pub id: String,
@@ -51,18 +61,71 @@ pub struct Store {
     pub base: PathBuf,
     vms_dir: PathBuf,
     running_file: PathBuf,
+    owned_file: PathBuf,
 }
 
 impl Store {
     pub fn new(base: PathBuf) -> Result<Store> {
         let vms_dir = base.join("vms");
         let running_file = base.join("running.json");
+        let owned_file = base.join("owned-disks.json");
         std::fs::create_dir_all(&vms_dir).context("create store dir")?;
         Ok(Store {
             base,
             vms_dir,
             running_file,
+            owned_file,
         })
+    }
+
+    // ---------- disks created by the manager ----------
+
+    /// The registry of the disks the manager created, keyed by the absolute
+    /// path of the image. A disk is deleted together with its VM only when
+    /// it is listed here, so the `owned` flag in a VM record is never
+    /// trusted on its own (audit F-03).
+    pub fn load_owned(&self) -> HashMap<String, OwnedDisk> {
+        let Ok(s) = std::fs::read_to_string(&self.owned_file) else {
+            return HashMap::new();
+        };
+        // A damaged registry means: no disk is known to be ours. The files
+        // stay on disk instead of being deleted by mistake.
+        serde_json::from_str(&s).unwrap_or_default()
+    }
+
+    pub fn save_owned(&self, owned: &HashMap<String, OwnedDisk>) -> Result<()> {
+        let tmp = self.base.join(".owned-disks.json.tmp");
+        std::fs::write(&tmp, serde_json::to_string_pretty(owned)?)?;
+        std::fs::rename(&tmp, &self.owned_file)?;
+        Ok(())
+    }
+
+    /// Remember a disk the manager has just created.
+    pub fn register_owned(&self, path: &std::path::Path, vm_id: &str, size_gb: u32) -> Result<()> {
+        let mut owned = self.load_owned();
+        owned.insert(
+            path.to_string_lossy().to_string(),
+            OwnedDisk {
+                vm_id: vm_id.to_string(),
+                size_gb,
+            },
+        );
+        self.save_owned(&owned)
+    }
+
+    /// Forget a disk that is not ours (or is gone).
+    pub fn unregister_owned(&self, path: &std::path::Path) -> Result<()> {
+        let mut owned = self.load_owned();
+        if owned.remove(&path.to_string_lossy().to_string()).is_some() {
+            self.save_owned(&owned)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the manager created this disk itself.
+    pub fn is_owned(&self, path: &std::path::Path) -> bool {
+        self.load_owned()
+            .contains_key(&path.to_string_lossy().to_string())
     }
 
     // ---------- manager-owned per-VM files ----------
@@ -157,13 +220,48 @@ impl Store {
 
         if let Some(ref vm) = vm {
             if delete_disks {
+                let owned = self.load_owned();
                 for d in vm.disks.iter().filter(|d| d.owned) {
                     report.disk_attempted = true;
-                    if !d.path.exists() {
-                        continue; // already absent — goal achieved
+                    let key = d.path.to_string_lossy().to_string();
+                    if !owned.contains_key(&key) {
+                        // The flag in the record is not enough: only a disk
+                        // that the manager created itself may be deleted
+                        // (audit F-03).
+                        report.errors.push(format!(
+                            "Kept the disk {}: it was not created by the manager",
+                            d.path.display()
+                        ));
+                        continue;
+                    }
+                    // A symlink or a directory is never removed here.
+                    match std::fs::symlink_metadata(&d.path) {
+                        Ok(m) if m.is_file() => {}
+                        Ok(_) => {
+                            report.errors.push(format!(
+                                "Kept the disk {}: it is not a regular file",
+                                d.path.display()
+                            ));
+                            continue;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            continue; // already absent — goal achieved
+                        }
+                        Err(e) => {
+                            report.errors.push(format!(
+                                "Failed to inspect the disk {}: {e}",
+                                d.path.display()
+                            ));
+                            continue;
+                        }
                     }
                     match std::fs::remove_file(&d.path) {
-                        Ok(_) => report.disks_deleted += 1,
+                        Ok(_) => {
+                            report.disks_deleted += 1;
+                            let mut owned = owned.clone();
+                            owned.remove(&key);
+                            let _ = self.save_owned(&owned);
+                        }
                         Err(e) => report
                             .errors
                             .push(format!("Failed to delete disk {}: {e}", d.path.display())),
@@ -334,6 +432,9 @@ mod tests {
         let store = Store::new(base.clone()).unwrap();
         let vm = vm_with_disks(&base);
         store.save_vm(&vm).unwrap();
+        // The manager registers the disks it created; only those may be
+        // deleted with the VM (audit F-03).
+        store.register_owned(&vm.disks[0].path, &vm.id, 10).unwrap();
 
         let loaded = store.get_vm("vmx").unwrap().unwrap();
         assert_eq!(loaded.disks.len(), 2);
@@ -346,6 +447,49 @@ mod tests {
         assert!(!vm.disks[0].path.exists());
         assert!(vm.disks[1].path.exists());
         let _ = std::fs::remove_file(&vm.disks[1].path);
+    }
+
+    /// The `owned` flag in a record is not enough: a disk that the manager
+    /// did not create stays on disk (audit F-03).
+    #[test]
+    fn a_disk_without_a_registry_entry_is_kept() {
+        let base = tmp_base();
+        let store = Store::new(base.clone()).unwrap();
+        let vm = vm_with_disks(&base);
+        store.save_vm(&vm).unwrap();
+        // The record says the disk belongs to the manager, but it was never
+        // registered.
+        assert!(vm.disks[0].owned);
+
+        let report = store.delete_vm("vmx", true).unwrap();
+        assert_eq!(report.disks_deleted, 0);
+        assert!(vm.disks[0].path.exists(), "the disk must stay on disk");
+        assert!(!report.errors.is_empty());
+        let _ = std::fs::remove_file(&vm.disks[0].path);
+        let _ = std::fs::remove_file(&vm.disks[1].path);
+    }
+
+    /// A symlink is never deleted, even when it is registered.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_not_deleted() {
+        use std::os::unix::fs::symlink;
+        let base = tmp_base();
+        let store = Store::new(base.clone()).unwrap();
+        let mut vm = vm_with_disks(&base);
+        let target = base.join("target.qcow2");
+        std::fs::write(&target, b"fake").unwrap();
+        let link = base.join("link.qcow2");
+        symlink(&target, &link).unwrap();
+        vm.disks[0].path = link.clone();
+        store.save_vm(&vm).unwrap();
+        store.register_owned(&link, &vm.id, 10).unwrap();
+
+        let report = store.delete_vm("vmx", true).unwrap();
+        assert_eq!(report.disks_deleted, 0);
+        assert!(link.exists(), "the symlink must stay");
+        assert!(target.exists(), "the target must stay");
+        let _ = std::fs::remove_file(&target);
     }
 
     #[test]
