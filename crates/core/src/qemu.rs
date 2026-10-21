@@ -8,6 +8,7 @@ use crate::accel;
 use crate::config::Config;
 use crate::qmp::Qmp;
 use crate::store::{RunningInfo, Store};
+use crate::validate;
 use crate::vm::{
     Accel, AudioBackend, BootFirst, CpuModel, DiskBus, DisplayMode, Firmware, MachineType, RtcBase,
     VgaModel, Vm,
@@ -142,13 +143,13 @@ pub fn build_qemu_args(vm: &Vm, l: &QemuLaunch) -> Result<Vec<String>> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        if mp.contains(',') {
-            bail!("Memory path must not contain ',': {mp}");
-        }
+        // The path is embedded in a comma-separated option, so a comma in it
+        // has to be escaped (audit F-08).
         let prealloc = if vm.mem_prealloc { "on" } else { "off" };
         objects.push(format!(
             "memory-backend-file,id=mem,size={m}M,mem-path={mp},share=on,prealloc={prealloc}",
-            m = vm.memory_mb
+            m = vm.memory_mb,
+            mp = validate::escape_commas(mp)
         ));
         machine_extra.push("memory-backend=mem".into());
     } else if vm.mem_prealloc {
@@ -168,7 +169,7 @@ pub fn build_qemu_args(vm: &Vm, l: &QemuLaunch) -> Result<Vec<String>> {
     a.extend(smp_args(vm));
     a.extend(cpu_accel_args(vm, l.accel_resolved));
     a.extend(disks_args(vm)?);
-    a.extend(["-nic".into(), net_arg(vm, &l.hostfwd_bind)]);
+    a.extend(["-nic".into(), net_arg(vm, &l.hostfwd_bind)?]);
     a.extend(video_display_args(vm, &l.vnc_bind));
 
     // --- input / entropy ---
@@ -305,10 +306,12 @@ fn disks_args(vm: &Vm) -> Result<Vec<String>> {
     let microvm = vm.machine == MachineType::MicroVm;
 
     for (i, d) in vm.disks.iter().enumerate() {
-        let did = &d.id;
+        // A disk id and a disk path end up inside comma-separated option
+        // strings, so a comma in them would start a new option (audit F-08).
+        let did = validate::escape_commas(&d.id);
         let mut drv = format!(
             "file={},format=qcow2,id={did},if=none,node-name={did}",
-            d.path.display()
+            validate::qemu_path(&d.path)
         );
         drv.push_str(&drive_opts(&d.opts));
         if d.opts.iothread {
@@ -357,10 +360,10 @@ fn short_serial(id: &str, i: usize) -> String {
 }
 
 /// `-nic` value: user/tap/none with optional model, MAC and hostfwd rules.
-fn net_arg(vm: &Vm, hostfwd_bind: &str) -> String {
+fn net_arg(vm: &Vm, hostfwd_bind: &str) -> Result<String> {
     use crate::vm::NetMode;
     if vm.net_mode == NetMode::None {
-        return "none".to_string();
+        return Ok("none".to_string());
     }
     let mut nic = match vm.net_mode {
         NetMode::Nat => "user".to_string(),
@@ -369,7 +372,10 @@ fn net_arg(vm: &Vm, hostfwd_bind: &str) -> String {
     if let Some(m) = vm.net_model.qemu_model() {
         nic.push_str(&format!(",model={m}"));
     }
-    nic.push_str(&format!(",mac={}", vm.effective_mac()));
+    nic.push_str(&format!(
+        ",mac={}",
+        validate::escape_commas(&vm.effective_mac())
+    ));
 
     match vm.net_mode {
         NetMode::Nat => {
@@ -385,7 +391,9 @@ fn net_arg(vm: &Vm, hostfwd_bind: &str) -> String {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
-                nic.push_str(&format!(",ifname={ifname}"));
+                // The interface name is limited to what Linux accepts, so it
+                // can never end the option (audit F-08).
+                nic.push_str(&format!(",ifname={}", validate::tap_name(ifname)?));
             }
             if let Some(br) = vm
                 .tap_br
@@ -393,13 +401,13 @@ fn net_arg(vm: &Vm, hostfwd_bind: &str) -> String {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
-                nic.push_str(&format!(",br={br}"));
+                nic.push_str(&format!(",br={}", validate::escape_commas(br)));
             }
             nic.push_str(",script=no,downscript=no");
         }
         NetMode::None => {}
     }
-    nic
+    Ok(nic)
 }
 
 /// Video adapter + display flags. VirGL couples the two: `gl=on` on the
@@ -413,7 +421,7 @@ fn video_display_args(vm: &Vm, vnc_bind: &str) -> Vec<String> {
             let start = vm.vnc_display.unwrap_or(0);
             let mut v = format!(
                 "{vb}:{d},to={rng}",
-                vb = vnc_bind,
+                vb = validate::escape_commas(vnc_bind),
                 d = start,
                 rng = VNC_PORT_SEARCH_RANGE
             );

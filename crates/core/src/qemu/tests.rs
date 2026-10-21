@@ -426,6 +426,51 @@ fn incoming_state_restores_via_file_uri() {
     assert!(joined.contains("-incoming file:/base/test.sav"));
 }
 
+/// A comma inside an option value must not start a new option (audit F-08).
+#[test]
+fn commas_in_option_values_are_escaped() {
+    let mut vm = sample_vm(DisplayMode::None);
+    vm.disks[0].path = PathBuf::from("/tmp/we,ird.qcow2");
+    vm.disks[0].id = "d,0".into();
+    vm.hostfwd = vec![HostFwd {
+        proto: FwdProto::Tcp,
+        host_port: 2222,
+        guest_port: 22,
+    }];
+    vm.mem_path = Some("/dev/huge,pages".into());
+
+    let mut l = launch();
+    l.hostfwd_bind = "127.0.0.1,1".into();
+    let joined = build_qemu_args(&vm, &l).unwrap().join(" ");
+
+    assert!(joined.contains("file=/tmp/we,,ird.qcow2,format=qcow2"));
+    assert!(joined.contains("id=d,,0"));
+    assert!(joined.contains("drive=d,,0"));
+    assert!(joined.contains("hostfwd=tcp:127.0.0.1,,1:2222-:22"));
+    assert!(joined.contains("mem-path=/dev/huge,,pages"));
+}
+
+/// A TAP interface name cannot carry a comma, so it is rejected instead of
+/// being escaped (audit F-08).
+#[test]
+fn tap_name_with_a_comma_is_rejected() {
+    let mut vm = sample_vm(DisplayMode::None);
+    vm.net_mode = NetMode::Bridged;
+    vm.tap_ifname = Some("tap,0".into());
+    assert!(build_qemu_args(&vm, &launch()).is_err());
+}
+
+/// A bridge name is a free-form value, so it is escaped.
+#[test]
+fn bridge_name_with_a_comma_is_escaped() {
+    let mut vm = sample_vm(DisplayMode::None);
+    vm.net_mode = NetMode::Bridged;
+    vm.tap_ifname = Some("tap0".into());
+    vm.tap_br = Some("br,0".into());
+    let joined = build(&vm);
+    assert!(joined.contains("br=br,,0"));
+}
+
 #[test]
 fn too_many_disks_rejected() {
     let mut vm = sample_vm(DisplayMode::None);

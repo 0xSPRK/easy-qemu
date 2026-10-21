@@ -524,7 +524,9 @@ impl HostFwd {
         format!(
             "hostfwd={p}:{b}:{hp}-:{gp}",
             p = self.proto.qemu_str(),
-            b = bind,
+            // The bind address is embedded in a comma-separated option
+            // (audit F-08).
+            b = crate::validate::escape_commas(bind),
             hp = self.host_port,
             gp = self.guest_port
         )
