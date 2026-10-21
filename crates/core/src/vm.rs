@@ -840,6 +840,11 @@ impl Vm {
                 bail!("Memory path must not be empty");
             }
         }
+
+        // SSH target: it reaches a command line when the console is opened.
+        crate::validate::ssh_host(&self.ssh.host)?;
+        crate::validate::ssh_user(&self.ssh.user)?;
+        crate::validate::port(self.ssh.port)?;
         Ok(())
     }
 
@@ -1002,6 +1007,10 @@ impl VmDraft {
                 Vm::validate_mac(mac)?;
             }
         }
+        // SSH target: it reaches a command line when the console is opened.
+        crate::validate::ssh_host(&self.ssh.host)?;
+        crate::validate::ssh_user(&self.ssh.user)?;
+        crate::validate::port(self.ssh.port)?;
         if self.gl && !matches!(self.display, DisplayMode::Gtk | DisplayMode::Sdl) {
             bail!("3D acceleration (virgl) requires the GTK or SDL display");
         }

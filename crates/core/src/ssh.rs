@@ -6,17 +6,22 @@ use std::process::Command;
 
 use anyhow::{anyhow, Result};
 
+use crate::validate;
 use crate::vm::SshConfig;
 
 /// ssh arguments for the target: port, accept-new host keys, user@host.
-pub fn build_ssh_args(cfg: &SshConfig) -> Vec<String> {
-    vec![
+/// The host and the user reach a command line, so they are checked first.
+pub fn build_ssh_args(cfg: &SshConfig) -> Result<Vec<String>> {
+    let host = validate::ssh_host(&cfg.host)?;
+    let user = validate::ssh_user(&cfg.user)?;
+    let port = validate::port(cfg.port)?;
+    Ok(vec![
         "-p".into(),
-        cfg.port.to_string(),
+        port.to_string(),
         "-o".into(),
         "StrictHostKeyChecking=accept-new".into(),
-        format!("{}@{}", cfg.user, cfg.host),
-    ]
+        format!("{user}@{host}"),
+    ])
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
@@ -37,10 +42,7 @@ const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 /// Open a new terminal window running ssh to the target.
 /// Windows: Windows Terminal when available, otherwise a plain console.
 pub fn launch(cfg: &SshConfig) -> Result<()> {
-    if cfg.user.trim().is_empty() || cfg.host.trim().is_empty() {
-        return Err(anyhow!("SSH user/host must not be empty"));
-    }
-    let args = build_ssh_args(cfg);
+    let args = build_ssh_args(cfg)?;
 
     #[cfg(windows)]
     {
@@ -53,8 +55,10 @@ pub fn launch(cfg: &SshConfig) -> Result<()> {
                 .map_err(|e| anyhow!("failed to launch Windows Terminal: {e}"))?;
             return Ok(());
         }
-        Command::new("cmd")
-            .args(["/C", "ssh"])
+        // The client is started directly, not through cmd.exe: a shell would
+        // interpret the target as a command (audit F-07).
+        let ssh = find_in_path("ssh").unwrap_or_else(|| PathBuf::from("ssh"));
+        Command::new(ssh)
             .args(&args)
             .creation_flags(CREATE_NEW_CONSOLE)
             .spawn()
@@ -97,7 +101,7 @@ mod tests {
             port: 2222,
             user: "root".into(),
         };
-        let args = build_ssh_args(&cfg);
+        let args = build_ssh_args(&cfg).unwrap();
         assert_eq!(
             args,
             vec![
@@ -108,6 +112,28 @@ mod tests {
                 "root@127.0.0.1"
             ]
         );
+    }
+
+    /// The host and the user must not be able to become an option of the
+    /// ssh client (audit F-07).
+    #[test]
+    fn ssh_args_reject_option_like_targets() {
+        for (host, user) in [
+            ("-oProxyCommand=calc", "root"),
+            ("127.0.0.1", "-oProxyCommand=calc"),
+            ("127.0.0.1 & calc", "root"),
+            ("127.0.0.1", "root;calc"),
+        ] {
+            let cfg = SshConfig {
+                host: host.into(),
+                port: 22,
+                user: user.into(),
+            };
+            assert!(
+                build_ssh_args(&cfg).is_err(),
+                "must reject host {host:?} user {user:?}"
+            );
+        }
     }
 
     #[test]
