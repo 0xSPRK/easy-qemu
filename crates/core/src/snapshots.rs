@@ -104,20 +104,9 @@ pub async fn list(img_bin: &Path, disk: &Path) -> Result<Vec<SnapInfo>> {
 }
 
 fn valid_snapshot_name(name: &str) -> Result<&str> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(anyhow!("Snapshot name cannot be empty"));
-    }
-    if name.len() > 60
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || "-_ .".contains(c))
-    {
-        return Err(anyhow!(
-            "Snapshot name: letters, digits, space and - _ . characters (up to 60 chars)"
-        ));
-    }
-    Ok(name)
+    // The rules live in the validation module, so the snapshot name is
+    // checked in the same way everywhere (audit F-18).
+    crate::validate::snapshot_name(name)
 }
 
 pub async fn create(img_bin: &Path, disk: &Path, name: &str) -> Result<()> {
