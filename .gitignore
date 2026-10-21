@@ -10,7 +10,6 @@
 # Build and tool artifacts
 *.log
 *.tmp
-/.repowise/
 
 # Local environment
 .env
@@ -21,8 +20,9 @@
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/*.local.json
 
-# Machine-specific MCP configuration (local only, never committed)
+# Local editor, agent and code-intelligence tooling (never committed)
+.claude/
+.vscode/
 .mcp.json
-.vscode/mcp.json
+.repowise/
