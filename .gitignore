@@ -1,8 +1,28 @@
+# Rust / Cargo
 /target
-/node_modules
-/ui/dist
-/ui/node_modules
-*.log
-.DS_Store
+/src-tauri/target
 
-.repowise/
+# Node
+/node_modules
+/ui/node_modules
+/ui/dist
+
+# Build and tool artifacts
+*.log
+*.tmp
+/.repowise/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*.local.json
+
+# Machine-specific MCP configuration (local only, never committed)
+.mcp.json
+.vscode/mcp.json
