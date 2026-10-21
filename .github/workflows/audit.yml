@@ -1,0 +1,41 @@
+name: Dependency audit
+
+on:
+  schedule:
+    # Weekly, Monday 04:17 UTC
+    - cron: "17 4 * * 1"
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "package-lock.json"
+      - "ui/package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+      - name: Audit root dependencies
+        run: npm audit --audit-level=high
+      - name: Audit UI dependencies
+        run: npm --prefix ui audit --audit-level=high

@@ -1,8 +1,28 @@
+# Rust / Cargo
 /target
-/node_modules
-/ui/dist
-/ui/node_modules
-*.log
-.DS_Store
+/src-tauri/target
 
+# Node
+/node_modules
+/ui/node_modules
+/ui/dist
+
+# Build and tool artifacts
+*.log
+*.tmp
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+
+# Local editor, agent and code-intelligence tooling (never committed)
+.claude/
+.vscode/
+.mcp.json
 .repowise/

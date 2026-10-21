@@ -3,10 +3,12 @@
   "private": true,
   "version": "0.2.0",
   "description": "Easy QEMU — desktop manager for QEMU virtual machines",
+  "license": "GPL-3.0-only",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "check": "npm --prefix ui run check"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.6"
