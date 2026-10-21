@@ -17,6 +17,7 @@ use crate::snapshots::{self, SnapInfo};
 use crate::ssh;
 use crate::stats::{self, DiskStat, VmStats};
 use crate::store::{DeleteReport, RunningInfo, Store};
+use crate::validate;
 use crate::vm::{DisplayMode, SshConfig, Vm, VmDraft};
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -657,6 +658,8 @@ impl Manager {
 
     /// Save a screenshot into the base dir; returns the file path.
     pub async fn screendump(&self, id: &str) -> Result<String> {
+        // The id becomes part of a file name (audit F-27).
+        let id = validate::vm_id(id)?;
         let shots = self.base.join("screenshots");
         std::fs::create_dir_all(&shots)?;
         let ts = SystemTime::now()
@@ -918,6 +921,8 @@ impl Manager {
     }
 
     pub async fn snapshot_live_create(&self, id: &str, name: &str) -> Result<()> {
+        // The name becomes part of the QMP job id (audit F-18).
+        let name = validate::snapshot_name(name)?;
         let vm = self.find_vm(id).await?;
         let devices = Self::live_devices(&vm);
         let mut q = self.connect_running(id).await?;
@@ -927,6 +932,7 @@ impl Manager {
     }
 
     pub async fn snapshot_live_apply(&self, id: &str, name: &str) -> Result<()> {
+        let name = validate::snapshot_name(name)?;
         let vm = self.find_vm(id).await?;
         let devices = Self::live_devices(&vm);
         let mut q = self.connect_running(id).await?;
@@ -936,6 +942,7 @@ impl Manager {
     }
 
     pub async fn snapshot_live_delete(&self, id: &str, name: &str) -> Result<()> {
+        let name = validate::snapshot_name(name)?;
         let vm = self.find_vm(id).await?;
         let devices = Self::live_devices(&vm);
         let mut q = self.connect_running(id).await?;
@@ -1126,6 +1133,36 @@ mod tests {
         assert!(mgr.delete("../victim", true).await.is_err());
         assert!(victim.exists(), "the file outside the store must survive");
         let _ = std::fs::remove_file(&victim);
+    }
+
+    /// The name of a screenshot is built from the id, so the id is validated
+    /// before the path is created (audit F-27).
+    #[tokio::test]
+    async fn screendump_rejects_a_hostile_id() {
+        let base = tmp_base();
+        let mgr = Manager::new(base.clone()).unwrap();
+        let err = mgr.screendump("../../victim").await.unwrap_err();
+        assert!(err.to_string().contains("VM id"), "unexpected error: {err}");
+        let outside = base.parent().unwrap().join("victim");
+        assert!(
+            !outside.exists(),
+            "nothing may be written outside the store"
+        );
+    }
+
+    /// A live snapshot name becomes part of the QMP job id, so it is
+    /// validated like the offline one (audit F-18).
+    #[tokio::test]
+    async fn live_snapshot_rejects_a_hostile_name() {
+        let mgr = Manager::new(tmp_base()).unwrap();
+        let err = mgr
+            .snapshot_live_create("vmx", "bad name; rm -rf /")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("napshot"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Creating a disk needs a real `qemu-img`. CI runners do not ship QEMU,
