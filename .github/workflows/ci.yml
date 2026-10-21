@@ -29,11 +29,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+      - name: Install qemu-img (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-utils
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy -p easy-qemu-core --all-targets -- -D warnings
       - name: Tests
+        # The tests that create a disk need qemu-img. It is installed above on
+        # Linux; on the Windows runner it is missing, so those tests skip
+        # themselves and say so in the log.
         run: cargo test -p easy-qemu-core --no-fail-fast
 
   app:

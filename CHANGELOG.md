@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.mcp.json` and `.vscode/mcp.json` are no longer tracked: they contained an
   absolute local path.
 - Both `package.json` files declare the `GPL-3.0-only` license.
+- The core tests that create a disk need `qemu-img`: it is installed on the
+  Linux runner, and on the Windows runner those tests skip themselves instead
+  of failing.
 
 ### Removed
 - Generated, machine-specific Repowise block in `.claude/CLAUDE.md`; the file

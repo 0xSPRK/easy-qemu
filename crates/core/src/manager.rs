@@ -1004,8 +1004,21 @@ mod tests {
         }
     }
 
+    /// Creating a disk needs a real `qemu-img`. The CI runners do not ship
+    /// QEMU, so the tests that create disks are skipped when it is missing.
+    fn qemu_img_available() -> bool {
+        let found = qemu::resolve_binary("qemu-img", &None).is_ok();
+        if !found {
+            eprintln!("skipping: qemu-img not found on this host");
+        }
+        found
+    }
+
     #[tokio::test]
     async fn create_and_list_roundtrip() {
+        if !qemu_img_available() {
+            return;
+        }
         let mgr = Manager::new(tmp_base()).unwrap();
         let vm = mgr.create(draft("alpha")).await.unwrap();
         assert!(vm.disks[0].owned);
@@ -1017,6 +1030,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_owned_disk_removes_file_and_record() {
+        if !qemu_img_available() {
+            return;
+        }
         let mgr = Manager::new(tmp_base()).unwrap();
         let vm = mgr.create(draft("beta")).await.unwrap();
         let disk = vm.disks[0].path.clone();
@@ -1029,6 +1045,9 @@ mod tests {
 
     #[tokio::test]
     async fn delete_keep_disk_preserves_file() {
+        if !qemu_img_available() {
+            return;
+        }
         let mgr = Manager::new(tmp_base()).unwrap();
         let vm = mgr.create(draft("gamma")).await.unwrap();
         let disk = vm.disks[0].path.clone();
