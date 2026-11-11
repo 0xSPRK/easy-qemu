@@ -11,6 +11,6 @@
     "check": "npm --prefix ui run check"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.6"
+    "@tauri-apps/cli": "^2.12.4"
   }
 }
